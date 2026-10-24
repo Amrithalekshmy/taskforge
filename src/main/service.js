@@ -531,6 +531,56 @@ class Service {
     for (const t of pending) await this.syncTask(t.id);
     return pending.length;
   }
+
+  // ---------- notifications ----------
+  markNotificationsRead(ids) {
+    const me = this.me();
+    for (const n of this.store.notifications) {
+      if (n.userId === me.id && (!ids || ids.includes(n.id))) n.read = true;
+    }
+    this.commit();
+  }
+
+  // ---------- events & AI follow-ups ----------
+  async suggestFollowups(taskId, event) {
+    const me = this.me();
+    const t = this.store.task(taskId);
+    if (!t || !this.canView(me, t)) throw new PermissionError('Not allowed');
+    t.event = { ...event, recordedAt: new Date().toISOString() };
+    if (t.category === 'general') t.category = 'event';
+    this.commit();
+    const apiKey = decryptSecret(this.store.settings.anthropicKey) || process.env.ANTHROPIC_API_KEY || null;
+    try {
+      return await ai.suggestNextSteps({ apiKey, task: t, event });
+    } catch (err) {
+      return { source: 'builtin', error: ai.describeAiError(err), summary: 'Showing the standard post-event checklist instead.', steps: ai.FALLBACK_STEPS, sources: [] };
+    }
+  }
+
+  createFollowups(taskId, steps) {
+    const me = this.me();
+    const parent = this.store.task(taskId);
+    const created = [];
+    for (const s of steps) {
+      const deadline = new Date(Date.now() + (Number(s.dueInDays) || 3) * 86400000);
+      deadline.setHours(18, 0, 0, 0);
+      const assigneeId = this.managedUserIds(me).has(s.assigneeId) ? s.assigneeId : me.id;
+      const remindAt = new Date(deadline.getTime() - 2 * 86400000);
+      const t = this.createTask({
+        title: s.title,
+        description: s.description,
+        assigneeId,
+        priority: PRIORITIES.includes(s.priority) ? s.priority : 'medium',
+        deadline: deadline.toISOString(),
+        category: 'event-followup',
+        tags: [parent?.event?.name, s.kind].filter(Boolean),
+        parentTaskId: taskId,
+        reminders: remindAt > new Date() ? [{ at: remindAt.toISOString(), text: `Coming up: ${s.title}` }] : [],
+      });
+      created.push(t);
+    }
+    return created;
+  }
 }
 
 function clamp(n) {
