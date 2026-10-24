@@ -351,3 +351,105 @@ function afterRender() {
     S.tasks._focusSearch = false;
   }
 }
+
+// ============================================================ shared components
+function progressBar(t, size = '') {
+  const active = !!t.timer && t.status !== 'done';
+  return `<div class="progress-wrap" data-tip="${t.progress}% complete · mode: ${t.progressMode}">
+    <div class="progress ${size}"><div class="bar ${t.status === 'done' ? 'done' : ''} ${active ? 'active' : ''}" style="width:${t.progress}%"></div></div>
+    <span class="pct">${t.status === 'done' ? '✓ ' : ''}${t.progress}%</span></div>`;
+}
+
+function prioChip(p) {
+  const [label, cls, ico] = PRIORITY[p] || PRIORITY.medium;
+  return `<span class="chip ${cls}">${ico} ${label}</span>`;
+}
+
+function deadlineChip(t) {
+  const d = deadlineInfo(t);
+  return d ? `<span class="chip ${d.cls}" data-tip="${t.deadline ? esc(fmtDate(t.deadline)) : ''}">${d.icon} ${esc(d.label)}</span>` : '';
+}
+
+function ghChip(t) {
+  if (!t.github) return '';
+  const icon = { issue: '◎', pr: '⑂', milestone: '⚑' }[t.github.type];
+  const label = `${t.github.repo.split('/')[1]} #${t.github.number}`;
+  const state = t.github.error ? '⚠ error' : t.github.state || 'syncing…';
+  return `<span class="chip gh" data-tip="${esc(t.github.repo)} · ${esc(state)}">${icon} ${esc(label)} · ${esc(state)}</span>`;
+}
+
+function timerButton(t) {
+  if (!canWorkTask(t) || t.status === 'done') return '';
+  const mine = t.timer && t.timer.userId === me().id;
+  return `<button class="btn sm ${mine ? 'timer-on' : ''}" data-action="toggle-timer" data-id="${t.id}">
+    ${mine ? `■ <span data-clock="${t.timer.start}">${fmtClock(Date.now() - Date.parse(t.timer.start))}</span>` : '▶ Start timer'}</button>`;
+}
+
+function suggestDone(t) {
+  if (t.status === 'done' || t.progress < 100 || !canWorkTask(t)) return '';
+  return `<div class="suggest"><span>✨</span><span class="grow">Looks complete – all progress is in. Mark as done?</span>
+    <button class="btn sm" data-action="set-status" data-id="${t.id}" data-status="done">Mark done</button></div>`;
+}
+
+function taskCard(t, { draggable = false } = {}) {
+  const spent = minutesOn(t);
+  const a = user(t.assigneeId);
+  const sub = t.subtasks.length ? `<span>☑ ${t.subtasks.filter((s) => s.done).length}/${t.subtasks.length}</span><span class="sep">·</span>` : '';
+  return `
+  <div class="task-card prio-${t.priority} ${t.status === 'done' ? 'is-done' : ''}" data-action="open-task" data-id="${t.id}" ${draggable ? 'draggable="true"' : ''}>
+    <div class="tc-top">${prioChip(t.priority)}${t.category !== 'general' ? `<span class="chip violet">${esc(t.category)}</span>` : ''}<span class="grow"></span>${deadlineChip(t)}</div>
+    <h4>${esc(t.title)}</h4>
+    <div class="tc-meta">${person(a)}<span class="sep">·</span>${sub}<span data-tip="Time logged">⏱ ${fmtDur(spent)}${t.estimateHours ? ` / ${t.estimateHours}h` : ''}</span></div>
+    ${progressBar(t)}
+    ${suggestDone(t)}
+    <div class="tc-foot">${ghChip(t)}<span class="grow"></span>${timerButton(t)}</div>
+  </div>`;
+}
+
+function compactRow(t) {
+  const d = deadlineInfo(t);
+  return `<div class="compact-row" data-action="open-task" data-id="${t.id}">
+    <div><div class="t">${esc(t.title)}</div><div class="s">${esc(user(t.assigneeId)?.name || '')}${t.github ? ` · ${esc(t.github.repo)}#${t.github.number}` : ''}</div></div>
+    ${progressBar(t)}
+    <div style="text-align:right">${d ? `<span class="chip ${d.cls}">${d.icon} ${esc(d.label)}</span>` : '<span class="muted small">No deadline</span>'}</div>
+  </div>`;
+}
+
+function empty(icon, text, action = '') {
+  return `<div class="empty"><div class="big">${icon}</div>${esc(text)}${action ? `<div style="margin-top:12px">${action}</div>` : ''}</div>`;
+}
+
+// Single-series column chart with hover tooltips.
+function barChart(points, fmt = (v) => v) {
+  const max = Math.max(1, ...points.map((p) => p.value));
+  return `<div class="bars">${points.map((p) => `
+      <div class="b ${p.value ? '' : 'zero'}" data-tip="${esc(p.label)}: ${esc(fmt(p.value))}"><i style="height:${(p.value / max) * 100}%"></i></div>`).join('')}
+    </div>
+    <div class="bars-x">${points.map((p, i) => `<span>${i % 2 === 0 ? esc(p.short) : ''}</span>`).join('')}</div>`;
+}
+
+function lastNDays(n) {
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(Date.now() - i * DAY);
+    d.setHours(0, 0, 0, 0);
+    out.push(d);
+  }
+  return out;
+}
+
+function userStats(uid) {
+  const mine = S.data.tasks.filter((t) => t.assigneeId === uid);
+  const active = mine.filter((t) => t.status !== 'done');
+  const week = startOfWeek();
+  return {
+    tasks: mine,
+    active: active.length,
+    done: mine.length - active.length,
+    overdue: active.filter(isOverdue).length,
+    doneThisWeek: mine.filter((t) => t.completedAt && Date.parse(t.completedAt) >= week).length,
+    weekMin: mine.reduce((s, t) => s + minutesOn(t, { userId: uid, since: week }), 0),
+    totalMin: S.data.tasks.reduce((s, t) => s + minutesOn(t, { userId: uid }), 0),
+    avgProgress: active.length ? Math.round(active.reduce((s, t) => s + t.progress, 0) / active.length) : (mine.length ? 100 : 0),
+  };
+}
