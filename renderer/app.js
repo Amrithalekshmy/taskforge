@@ -1238,3 +1238,50 @@ function subLine(text) {
 function remLine(r) {
   return `<div class="line" data-id="${esc(r.id || '')}"><input type="datetime-local" name="remAt" value="${toLocalInput(r.at)}" style="width:220px"><input type="text" name="remText" value="${esc(r.text || '')}" placeholder="Reminder text, e.g. Confirm sponsor logos"><button class="btn sm ghost" type="button" data-x="del-line">✕</button></div>`;
 }
+
+// ---------- person form ----------
+function personForm(existing = null, presetTeam = null) {
+  const chair = me().role === 'chair';
+  const myTeams = teamsIHead();
+  const u = existing || {};
+  const m = openModal(`
+    <div class="modal-head"><div class="grow"><h2>${existing ? `Edit ${esc(u.name)}` : 'Add a person'}</h2>
+      <p>${existing ? 'Update their details, role or team.' : 'Create an account. Share the username and password with them so they can sign in on this app.'}</p></div></div>
+    <form class="modal-body" id="person-form">
+      <div class="row"><div class="field"><label>Full name *</label><input type="text" name="name" value="${esc(u.name || '')}" required></div>
+        <div class="field"><label>Username *</label><input type="text" name="username" value="${esc(u.username || '')}" ${existing ? 'disabled' : 'required'}></div></div>
+      <div class="row"><div class="field"><label>Email</label><input type="email" name="email" value="${esc(u.email || '')}"></div>
+        <div class="field"><label>Title / position</label><input type="text" name="title" value="${esc(u.title || '')}" placeholder="e.g. Design lead"></div></div>
+      <div class="row">
+        ${chair ? `<div class="field"><label>Role</label><select name="role">${['member', 'head', 'chair'].map((r) => `<option value="${r}" ${(u.role || 'member') === r ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select></div>` : ''}
+        <div class="field"><label>Team</label><select name="teamId">${chair ? '<option value="">No team</option>' : ''}${myTeams.map((t) => `<option value="${t.id}" ${(u.teamId || presetTeam) === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label>${existing ? 'Reset password (leave blank to keep)' : 'Temporary password *'}</label><input type="text" name="password" ${existing ? '' : 'required minlength="6"'} placeholder="min. 6 characters"></div>
+      <div class="field"><label>GitHub username (optional)</label><input type="text" name="githubLogin" value="${esc(u.githubLogin || '')}" placeholder="so their public activity shows up"></div>
+      <div class="error-text" id="person-err"></div>
+    </form>
+    <div class="modal-foot">${existing && chair ? '<button class="btn danger" data-x="delete">Remove person</button>' : ''}<span class="grow"></span>
+      <button class="btn" data-x="close">Cancel</button><button class="btn primary" data-x="save">${existing ? 'Save' : 'Add person'}</button></div>`);
+  const form = $('#person-form');
+  m.onclick = async (e) => {
+    const x = e.target.closest('[data-x]')?.dataset.x;
+    if (x === 'close') closeModal();
+    if (x === 'save') form.requestSubmit();
+    if (x === 'delete' && await confirmModal(`Remove ${u.name}?`, 'Their account is deleted. Tasks assigned to them become unassigned.', 'Remove', true)) {
+      run(() => api('deleteUser', u.id), 'Person removed');
+      if (S.page === 'member') S.page = 'org';
+    }
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    try {
+      const saved = existing ? await api('updateUser', u.id, data) : await api('createUser', data);
+      if ((data.githubLogin || '') !== (u.githubLogin || '')) await api('setGithubLogin', saved.id, data.githubLogin);
+      closeModal();
+      toast(existing ? 'Saved' : `${saved.name} added – username "${saved.username}"`, 'success');
+    } catch (err) {
+      $('#person-err').textContent = err.message;
+    }
+  };
+}
