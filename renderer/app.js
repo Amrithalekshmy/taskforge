@@ -1322,3 +1322,96 @@ function teamForm(existing = null) {
     }
   };
 }
+
+// ---------- event follow-up flow ----------
+function eventFlow(taskId, { askFirst = true } = {}) {
+  const t = task(taskId);
+  if (!t) return;
+  const step = askFirst && !t.event ? 'ask' : 'form';
+  const guess = t.event?.name || t.tags.find((x) => /fest|hack|summit|conf|meet|event/i.test(x)) || t.title;
+  const head = `<div class="modal-head"><div class="grow"><h2>🎉 "${esc(t.title)}" is done!</h2>`;
+
+  if (step === 'ask') {
+    const m = openModal(`${head}<p>This looks like it was part of an event. Was it? If so, TaskForge can research what to do next – sponsor follow-ups, payments, recaps and the small things that get forgotten.</p></div></div>
+      <div class="modal-foot"><button class="btn" data-x="no">No, it wasn't</button><button class="btn primary" data-x="yes">Yes, it was for an event</button></div>`);
+    m.onclick = (e) => {
+      const x = e.target.closest('[data-x]')?.dataset.x;
+      if (x === 'no') closeModal();
+      if (x === 'yes') eventFlow(taskId, { askFirst: false });
+    };
+    return;
+  }
+
+  const m = openModal(`${head}<p>Tell us about the event and we'll suggest next steps${S.data.settings.aiConfigured ? ' using a live web search' : ''}.</p></div><button class="btn sm ghost" data-x="close">✕</button></div>
+    <form class="modal-body" id="event-form">
+      <div class="row"><div class="field"><label>Event name *</label><input type="text" name="name" value="${esc(guess)}" required></div>
+        <div class="field"><label>Type</label><select name="type">${['Hackathon', 'Workshop', 'Tech talk / seminar', 'Conference', 'Cultural fest', 'Competition', 'Meetup', 'Webinar', 'Fundraiser', 'Product launch', 'Other'].map((x) => `<option ${t.event?.type === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div></div>
+      <div class="field"><label>Event date</label><input type="date" name="date" value="${esc(t.event?.date || '')}"></div>
+      <div class="field"><label>Notes for better suggestions</label><textarea name="notes" placeholder="e.g. 3 sponsors (Acme, Globex…), 200 attendees, prizes still pending, venue was the main auditorium">${esc(t.event?.notes || '')}</textarea></div>
+    </form>
+    <div class="modal-foot"><button class="btn" data-x="close">Skip</button><button class="btn primary" data-x="go">✨ Suggest next steps</button></div>`);
+  const form = $('#event-form');
+  m.onclick = (e) => {
+    const x = e.target.closest('[data-x]')?.dataset.x;
+    if (x === 'close') closeModal();
+    if (x === 'go') form.requestSubmit();
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const event = Object.fromEntries(new FormData(form));
+    $('#modal-root .modal').innerHTML = `<div class="modal-body" style="text-align:center;padding:40px">
+      <div class="spinner"></div><h3>Researching next steps for ${esc(event.name)}…</h3>
+      <p class="muted small">${S.data.settings.aiConfigured ? 'Claude is searching the web for best practices. This can take up to a minute.' : 'Preparing the standard post-event checklist.'}</p></div>`;
+    try {
+      const result = await api('suggestFollowups', taskId, event);
+      showSuggestions(taskId, event, result);
+    } catch (err) {
+      closeModal();
+      toast(err.message, 'error');
+    }
+  };
+}
+
+function showSuggestions(taskId, event, result) {
+  const people = S.data.users.filter((u) => canManageUser(u.id));
+  const t = task(taskId);
+  const defaultAssignee = canManageUser(t?.assigneeId) ? t.assigneeId : me().id;
+  const m = openModal(`
+    <div class="modal-head"><div class="grow"><h2>Next steps for ${esc(event.name)}</h2>
+      <p>${esc(result.summary || '')}</p>
+      ${result.error ? `<p class="error-text">${esc(result.error)}</p>` : ''}
+      <p class="small muted">${result.source === 'ai' ? '✨ Researched by Claude with web search.' : '📋 Built-in checklist.'} Pick the steps to turn into tasks – each gets a deadline and a reminder.</p></div>
+      <button class="btn sm ghost" data-x="close">✕</button></div>
+    <div class="modal-body">
+      ${result.steps.map((s, i) => `<div class="step" data-i="${i}">
+        <input type="checkbox" checked data-x="toggle">
+        <div><div class="t">${esc(s.title)} ${s.kind ? `<span class="chip">${esc(s.kind)}</span>` : ''} ${prioChip(s.priority)}</div><div class="d">${esc(s.description || '')}</div></div>
+        <select name="assignee">${people.map((u) => `<option value="${u.id}" ${u.id === defaultAssignee ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
+        <div><input type="number" name="days" min="0" value="${Number(s.dueInDays) || 3}" data-tip="Due in N days"><div class="small muted" style="margin-top:3px">days</div></div>
+      </div>`).join('')}
+      ${result.sources?.length ? `<div class="sources"><b>Sources</b>${result.sources.map((s) => `<a href="${esc(s.url)}" target="_blank">${esc(s.title || s.url)}</a>`).join('')}</div>` : ''}
+    </div>
+    <div class="modal-foot"><span class="small muted grow" id="sel-count"></span><button class="btn" data-x="close">Not now</button><button class="btn primary" data-x="create">Create selected tasks</button></div>`, { wide: true });
+  const count = () => { $('#sel-count').textContent = `${$$('.step input[type=checkbox]:checked').length} selected`; };
+  count();
+  m.onclick = async (e) => {
+    const x = e.target.closest('[data-x]')?.dataset.x;
+    if (x === 'close') closeModal();
+    if (x === 'toggle') { e.target.closest('.step').classList.toggle('off', !e.target.checked); count(); }
+    if (x === 'create') {
+      const steps = $$('.step').filter((el) => $('input[type=checkbox]', el).checked).map((el) => ({
+        ...result.steps[el.dataset.i],
+        assigneeId: $('select', el).value,
+        dueInDays: Number($('input[name=days]', el).value) || 0,
+      }));
+      if (!steps.length) return closeModal();
+      try {
+        await api('createFollowups', taskId, steps);
+        closeModal();
+        toast(`${steps.length} follow-up task${steps.length === 1 ? '' : 's'} created with reminders`, 'success');
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+  };
+}
