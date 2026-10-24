@@ -866,3 +866,41 @@ async function loadGithubPanel(uid, force = false) {
   const el = $(`[data-gh-panel="${uid}"]`);
   if (el) el.innerHTML = ghPanelInner(uid);
 }
+
+// ============================================================ settings
+function pageSettings() {
+  const s = S.data.settings;
+  return `
+    <div class="grid cols-2">
+      <div class="stack">
+        <form class="card" id="profile-form">
+          <div class="card-head"><h3>Your account</h3></div>
+          <div class="field"><label>Name</label><input type="text" name="name" value="${esc(me().name)}"></div>
+          <div class="row"><div class="field"><label>Email</label><input type="email" name="email" value="${esc(me().email)}"></div>
+          <div class="field"><label>Title / position</label><input type="text" name="title" value="${esc(me().title)}" placeholder="e.g. Web lead"></div></div>
+          <button class="btn primary" type="submit">Save</button>
+        </form>
+        <form class="card" id="password-form">
+          <div class="card-head"><h3>Change password</h3></div>
+          <div class="field"><label>Current password</label><input type="password" name="current" required></div>
+          <div class="field"><label>New password</label><input type="password" name="next" minlength="6" required></div>
+          <button class="btn" type="submit">Update password</button>
+        </form>
+        <div class="card flex"><span class="grow">Signed in as <b>${esc(me().username)}</b></span><button class="btn danger" data-action="logout">Sign out</button></div>
+      </div>
+      ${me().role === 'chair' ? `
+      <form class="card" id="settings-form">
+        <div class="card-head"><h3>Workspace</h3><span class="sub">chairperson only</span></div>
+        <div class="field"><label>Organisation name</label><input type="text" name="orgName" value="${esc(S.data.orgName)}"></div>
+        <div class="row">
+          <div class="field"><label>Deadline reminder (hours before)</label><input type="number" name="reminderLeadHours" min="1" value="${s.reminderLeadHours}"></div>
+          <div class="field"><label>GitHub sync every (minutes)</label><input type="number" name="githubSyncMinutes" min="1" value="${s.githubSyncMinutes}"></div>
+        </div>
+        <div class="field"><label>Anthropic API key (for AI event follow-ups)</label>
+          <input type="password" name="anthropicKey" placeholder="${s.aiConfigured ? '•••••••• configured – type to replace' : 'sk-ant-…'}">
+          <span class="hint">When a task for an event is completed, Claude searches the web and suggests next steps (sponsor follow-ups, reports, recaps…). Without a key a built-in checklist is used.</span></div>
+        <label class="flex" style="margin-bottom:16px"><input type="checkbox" name="keepRunningInTray" ${s.keepRunningInTray ? 'checked' : ''}> Keep running in the system tray when the window is closed (so reminders still fire)</label>
+        <div class="flex"><button class="btn primary" type="submit">Save settings</button>${s.aiConfigured ? '<button class="btn ghost" type="button" data-action="clear-ai-key">Remove API key</button>' : ''}</div>
+      </form>` : `<div class="card"><div class="card-head"><h3>Reminders</h3></div><p class="muted">You'll get a desktop notification ${s.reminderLeadHours}h before each deadline, when something is overdue, and for any custom reminders on your tasks.</p></div>`}
+    </div>`;
+}
