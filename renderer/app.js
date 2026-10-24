@@ -916,3 +916,168 @@ function renderNotifPanel() {
       </div>`).join('') : empty('🔕', 'You are all caught up')}
   </div>`;
 }
+
+// ============================================================ task drawer
+function openTask(id) {
+  S.drawerTaskId = id;
+  S.notifOpen = false;
+  // A just-created task may not be in our snapshot yet – refresh renders the drawer.
+  if (task(id)) renderDrawer();
+  else refresh();
+}
+
+function closeDrawer() {
+  S.drawerTaskId = null;
+  $('#drawer-root').innerHTML = '';
+}
+
+function renderDrawer() {
+  const t = task(S.drawerTaskId);
+  if (!t) return closeDrawer();
+  const manage = canManageTask(t);
+  const work = canWorkTask(t);
+  const scroll = $('.drawer-body')?.scrollTop || 0;
+  const children = S.data.tasks.filter((x) => x.parentTaskId === t.id);
+  const parent = t.parentTaskId && task(t.parentTaskId);
+  const total = minutesOn(t);
+  const perUser = {};
+  for (const l of t.timeLogs) perUser[l.userId] = (perUser[l.userId] || 0) + l.minutes;
+  if (t.timer) perUser[t.timer.userId] = (perUser[t.timer.userId] || 0) + (Date.now() - Date.parse(t.timer.start)) / 60000;
+  const maxUser = Math.max(1, ...Object.values(perUser));
+  const myTimer = t.timer?.userId === me().id;
+
+  $('#drawer-root').innerHTML = `
+    <div class="drawer-backdrop" data-action="close-drawer"></div>
+    <aside class="drawer">
+      <div class="drawer-head">
+        <div class="flex wrap">${prioChip(t.priority)}${t.category !== 'general' ? `<span class="chip violet">${esc(t.category)}</span>` : ''}${deadlineChip(t)}${ghChip(t)}
+          <span class="grow"></span>
+          ${manage ? `<button class="btn sm ghost" data-action="edit-task" data-id="${t.id}">✎ Edit</button><button class="btn sm ghost danger" data-action="delete-task" data-id="${t.id}">🗑</button>` : ''}
+          <button class="btn sm ghost" data-action="close-drawer">✕</button></div>
+        <h2>${esc(t.title)}</h2>
+        <div class="small muted">Assigned by ${esc(user(t.assignedById)?.name || '—')} to <b style="color:var(--text)">${esc(user(t.assigneeId)?.name || '—')}</b> · created ${relTime(t.createdAt)}${parent ? ` · follow-up of <a href="#" data-action="open-task" data-id="${parent.id}">${esc(parent.title)}</a>` : ''}</div>
+      </div>
+      <div class="drawer-body">
+        <div class="section">
+          <div class="section-title">Progress<span class="grow"></span>
+            ${work && t.status !== 'done' ? `<select data-change="progress-mode" data-id="${t.id}" style="width:auto;padding:4px 8px;font-size:12px">
+              <option value="manual" ${t.progressMode === 'manual' ? 'selected' : ''}>Manual</option>
+              <option value="checklist" ${t.progressMode === 'checklist' ? 'selected' : ''}>From checklist</option>
+              ${t.github ? `<option value="github" ${t.progressMode === 'github' ? 'selected' : ''}>From GitHub</option>` : ''}</select>` : `<span class="small">${t.progressMode}</span>`}
+          </div>
+          ${progressBar(t, 'lg')}
+          ${work && t.progressMode === 'manual' && t.status !== 'done' ? `<input type="range" min="0" max="100" step="5" value="${t.progress}" data-change="progress" data-id="${t.id}" style="margin-top:10px">` : ''}
+          <div style="margin-top:10px">${suggestDone(t)}</div>
+          <div class="seg" style="margin-top:12px">${Object.entries(STATUS).map(([k, l]) => `<button class="${t.status === k ? 'on' : ''}" ${work ? `data-action="set-status" data-id="${t.id}" data-status="${k}"` : 'disabled'}>${l}</button>`).join('')}</div>
+        </div>
+
+        ${t.description ? `<div class="section"><div class="section-title">Description</div><div class="desc">${esc(t.description)}</div></div>` : ''}
+
+        <div class="section"><div class="section-title">Details</div>
+          <div class="kv">
+            <span class="k">Assignee</span><span>${person(user(t.assigneeId))}</span>
+            <span class="k">Assigned by</span><span>${person(user(t.assignedById))}</span>
+            <span class="k">Team</span><span>${team(t.teamId) ? `<span class="flex"><span class="team-dot" style="background:${team(t.teamId).color}"></span>${esc(team(t.teamId).name)}</span>` : '—'}</span>
+            <span class="k">Deadline</span><span>${fmtDate(t.deadline)}</span>
+            <span class="k">Time</span><span>${fmtDur(total)} logged${t.estimateHours ? ` of ${t.estimateHours}h estimated` : ''}</span>
+            ${t.completedAt ? `<span class="k">Completed</span><span>${fmtDate(t.completedAt)}</span>` : ''}
+            ${t.tags.length ? `<span class="k">Tags</span><span class="flex wrap">${t.tags.map((x) => `<span class="chip">#${esc(x)}</span>`).join('')}</span>` : ''}
+          </div>
+        </div>
+
+        <div class="section"><div class="section-title">Checklist<span class="grow"></span>${t.subtasks.length ? `${t.subtasks.filter((s) => s.done).length}/${t.subtasks.length}` : ''}</div>
+          ${t.subtasks.map((s) => `<label class="checklist-item ${s.done ? 'done' : ''}">
+              <input type="checkbox" ${s.done ? 'checked' : ''} ${work ? `data-change="subtask" data-id="${t.id}" data-sub="${s.id}"` : 'disabled'}>
+              <span>${esc(s.text)}</span>${work ? `<button class="btn sm ghost x" data-action="subtask-del" data-id="${t.id}" data-sub="${s.id}">✕</button>` : ''}
+            </label>`).join('')}
+          ${work ? `<form class="flex" data-form="subtask-add" data-id="${t.id}" style="margin-top:6px"><input type="text" name="text" placeholder="Add a checklist item…"><button class="btn sm" type="submit">Add</button></form>` : ''}
+        </div>
+
+        <div class="section"><div class="section-title">Time tracking</div>
+          <div class="timer-box">
+            <div class="grow"><div class="small muted">Total time on this task</div><div class="big" ${t.timer ? `data-total-start="${Date.parse(t.timer.start)}" data-total-base="${Math.round((total - (Date.now() - Date.parse(t.timer.start)) / 60000) * 60000)}"` : ''}>${fmtClock(total * 60000)}</div>
+              ${t.timer && !myTimer ? `<div class="small" style="color:#7ee07e">● ${esc(user(t.timer.userId)?.name || '')} is working on this now</div>` : ''}</div>
+            ${work && t.status !== 'done' ? `<button class="btn ${myTimer ? 'timer-on' : 'primary'}" data-action="toggle-timer" data-id="${t.id}">${myTimer ? '■ Stop timer' : '▶ Start timer'}</button>` : ''}
+          </div>
+          ${work ? `<form class="flex" data-form="log-time" data-id="${t.id}" style="margin-top:10px">
+            <input type="number" name="minutes" min="1" placeholder="Minutes" style="width:110px"><input type="text" name="note" placeholder="What did you do? (optional)"><button class="btn sm" type="submit">Log time</button></form>` : ''}
+          ${Object.keys(perUser).length ? `<div style="margin-top:12px">${Object.entries(perUser).sort((a, b) => b[1] - a[1]).map(([uid, m]) => `
+            <div class="hbar-row" data-tip="${esc(user(uid)?.name || 'Former member')}: ${fmtDur(m)}">${person(user(uid))}<div class="track"><div class="fill" style="width:${(m / maxUser) * 100}%"></div></div><span class="v">${fmtDur(m)}</span></div>`).join('')}</div>` : ''}
+          ${t.timeLogs.length ? `<details style="margin-top:8px"><summary class="small muted" style="cursor:pointer">${t.timeLogs.length} time entries</summary>
+            ${[...t.timeLogs].reverse().map((l) => `<div class="log-row">${avatar(user(l.userId), 'sm')}<span class="grow">${esc(l.note || 'Timer session')}</span><span>${fmtDur(l.minutes)}</span><span class="muted">${fmtDate(l.end)}</span></div>`).join('')}</details>` : ''}
+        </div>
+
+        <div class="section"><div class="section-title">GitHub<span class="grow"></span>${t.github ? `<button class="btn sm ghost" data-action="sync-task" data-id="${t.id}">⟳ Sync now</button>` : ''}</div>
+          ${t.github ? ghTaskBox(t, work) : work ? `
+            <form data-form="gh-link" data-id="${t.id}">
+              <p class="small muted" style="margin-top:0">Link an issue, PR or milestone. Progress updates automatically, and the task completes itself when the issue closes / PR merges / milestone finishes.</p>
+              <div class="row"><div class="field"><input type="text" name="repo" placeholder="owner/repo" list="repo-list"></div>
+                <div class="field" style="flex:.6"><select name="type"><option value="issue">Issue</option><option value="pr">Pull request</option><option value="milestone">Milestone</option></select></div>
+                <div class="field" style="flex:.5"><input type="number" name="number" placeholder="#"></div></div>
+              <button class="btn sm primary" type="submit">Link to GitHub</button>
+            </form>` : '<span class="muted small">Not linked</span>'}
+        </div>
+
+        <div class="section"><div class="section-title">Reminders</div>
+          ${t.deadline && t.status !== 'done' ? `<div class="log-row">⏰<span class="grow">Automatic: ${S.data.settings.reminderLeadHours}h before the deadline</span><span class="chip ${t.deadlineReminded ? 'good' : ''}">${t.deadlineReminded ? 'sent' : 'scheduled'}</span></div>` : ''}
+          ${t.reminders.map((r) => `<div class="log-row">🔔<span class="grow">${esc(r.text || 'Reminder')} <span class="muted">· ${fmtDate(r.at)}</span></span><span class="chip ${r.sent ? 'good' : 'accent'}">${r.sent ? 'sent' : relTime(r.at)}</span>
+            ${work ? `<button class="btn sm ghost" data-action="reminder-del" data-id="${t.id}" data-rem="${r.id}">✕</button>` : ''}</div>`).join('')}
+          ${work ? `<form class="flex" data-form="reminder-add" data-id="${t.id}" style="margin-top:8px"><input type="datetime-local" name="at" style="width:210px" required><input type="text" name="text" placeholder="e.g. Call sponsors to confirm stall"><button class="btn sm" type="submit">Add</button></form>` : ''}
+        </div>
+
+        <div class="section"><div class="section-title">Event & follow-ups</div>
+          ${t.event ? `<div class="kv"><span class="k">Event</span><span><b>${esc(t.event.name)}</b>${t.event.type ? ` <span class="chip">${esc(t.event.type)}</span>` : ''}</span>
+            ${t.event.date ? `<span class="k">Date</span><span>${esc(t.event.date)}</span>` : ''}</div>` : ''}
+          ${children.length ? `<div class="compact-list" style="margin-top:8px">${sortTasks(children).map(compactRow).join('')}</div>` : ''}
+          <button class="btn sm" style="margin-top:10px" data-action="event-flow" data-id="${t.id}">✨ ${t.event ? 'Suggest more next steps' : 'Is this for an event? Plan follow-ups'}</button>
+        </div>
+
+        <div class="section"><div class="section-title">Comments</div>
+          ${t.comments.map((c) => `<div class="comment">${avatar(user(c.userId), 'sm')}<div class="body"><div class="meta"><b style="color:var(--text)">${esc(user(c.userId)?.name || 'Someone')}</b> · ${relTime(c.at)}</div>${esc(c.text)}</div></div>`).join('')}
+          <form class="flex" data-form="comment" data-id="${t.id}" style="margin-top:10px"><input type="text" name="text" placeholder="Write a comment…"><button class="btn sm" type="submit">Send</button></form>
+        </div>
+      </div>
+    </aside>
+    <datalist id="repo-list">${(S.myRepos || []).map((r) => `<option value="${esc(r)}">`).join('')}</datalist>`;
+  $('.drawer-body').scrollTop = scroll;
+  loadMyRepos();
+}
+
+function ghTaskBox(t, work) {
+  const g = t.github;
+  const i = g.info || {};
+  const kind = { issue: 'Issue', pr: 'Pull request', milestone: 'Milestone' }[g.type];
+  const stateCls = { merged: 'violet', closed: 'good', open: 'accent', draft: '' }[g.state] || '';
+  const stats = [];
+  if (g.type === 'pr') {
+    if (i.commits != null) stats.push(`${i.commits} commits`, `<span style="color:#3fb950">+${i.additions}</span> <span style="color:#f85149">−${i.deletions}</span>`, `${i.changedFiles} files`);
+    if (i.branch) stats.push(`⑂ ${esc(i.branch)}`);
+    if (i.approved) stats.push('✓ approved');
+    if (i.reviewers?.length) stats.push(`reviewers: ${i.reviewers.map(esc).join(', ')}`);
+  }
+  if (g.type === 'issue') {
+    if (i.comments != null) stats.push(`${i.comments} comments`);
+    if (i.labels?.length) stats.push(i.labels.map((l) => `<span class="chip">${esc(l)}</span>`).join(' '));
+    if (i.assignees?.length) stats.push(`assignees: ${i.assignees.map(esc).join(', ')}`);
+  }
+  if (g.type === 'milestone' && i.openIssues != null) stats.push(`${i.closedIssues} closed`, `${i.openIssues} open`, i.dueOn ? `due ${fmtDate(i.dueOn, false)}` : '');
+  if (i.checklist?.total) stats.push(`☑ ${i.checklist.done}/${i.checklist.total} checklist`);
+  return `<div class="gh-box">
+    <div class="flex"><span class="small" style="color:#9198a1">${kind} · ${esc(g.repo)} #${g.number}</span><span class="grow"></span>${g.state ? `<span class="chip ${stateCls}">${esc(g.state)}</span>` : ''}</div>
+    <div class="t" style="margin-top:6px">${i.url ? `<a href="${esc(i.url)}" target="_blank">${esc(i.title)}</a>` : '<span class="muted">Waiting for first sync…</span>'}</div>
+    ${stats.length ? `<div class="gh-stats">${stats.filter(Boolean).map((s) => `<span>${s}</span>`).join('')}</div>` : ''}
+    ${g.error ? `<div class="error-text" style="margin:8px 0 0">⚠ ${esc(g.error)}</div>` : ''}
+    <div class="flex small" style="margin-top:10px;color:#9198a1">${g.lastSync ? `Synced ${relTime(g.lastSync)}` : 'Not synced yet'}<span class="grow"></span>
+      ${work ? `<button class="btn sm ghost" data-action="gh-unlink" data-id="${t.id}">Unlink</button>` : ''}</div>
+  </div>`;
+}
+
+async function loadMyRepos() {
+  if (S.myRepos !== null) return;
+  S.myRepos = [];
+  try {
+    S.myRepos = await api('githubMyRepos');
+    const dl = $('#repo-list');
+    if (dl) dl.innerHTML = S.myRepos.map((r) => `<option value="${esc(r)}">`).join('');
+  } catch {}
+}
