@@ -1106,3 +1106,135 @@ function confirmModal(title, text, okLabel = 'Confirm', danger = false) {
     };
   });
 }
+
+// ---------- task form ----------
+function taskForm(existing = null, preset = {}) {
+  const t = existing || {};
+  const assignable = S.data.users.filter((u) => canManageUser(u.id));
+  const assigneeId = t.assigneeId || preset.assignee || (preset.team ? '' : me().id);
+  const teamMembers = preset.team ? assignable.filter((u) => u.teamId === preset.team) : assignable;
+  const subs = (t.subtasks || []).map((s) => s.text);
+  const reminders = t.reminders || [];
+
+  const m = openModal(`
+    <div class="modal-head"><div class="grow"><h2>${existing ? 'Edit task' : 'New task'}</h2>
+      <p>${isManager() ? 'Assign work to someone in your team, set a deadline and optional GitHub link.' : 'Create a personal task to track your own work.'}</p></div>
+      <button class="btn sm ghost" data-x="close">✕</button></div>
+    <form class="modal-body" id="task-form">
+      <div class="field"><label>Title *</label><input type="text" name="title" value="${esc(t.title || '')}" required placeholder="What needs to be done?"></div>
+      <div class="field"><label>Description</label><textarea name="description" placeholder="Details, links, acceptance criteria…">${esc(t.description || '')}</textarea></div>
+      <div class="row">
+        <div class="field"><label>Assignee</label><select name="assigneeId" ${assignable.length < 2 ? 'disabled' : ''}>
+          ${(assignable.length ? (teamMembers.length ? teamMembers : assignable) : [me()]).map((u) => `<option value="${u.id}" ${u.id === assigneeId ? 'selected' : ''}>${esc(u.name)}${u.id === me().id ? ' (me)' : ''}${team(u.teamId) ? ` – ${esc(team(u.teamId).name)}` : ''}</option>`).join('')}
+        </select></div>
+        <div class="field"><label>Priority</label><select name="priority">${Object.entries(PRIORITY).map(([k, [l]]) => `<option value="${k}" ${(t.priority || 'medium') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Deadline</label><input type="datetime-local" name="deadline" value="${toLocalInput(t.deadline)}"><span class="hint">A reminder is sent ${S.data.settings.reminderLeadHours}h before.</span></div>
+        <div class="field"><label>Estimate (hours)</label><input type="number" name="estimateHours" min="0" step="0.5" value="${t.estimateHours || ''}"></div>
+      </div>
+      <div class="row">
+        <div class="field"><label>Category</label><select name="category">${CATEGORIES.map((c) => `<option ${(t.category || 'general') === c ? 'selected' : ''}>${c}</option>`).join('')}</select>
+          <span class="hint">Pick "event" so completion triggers follow-up suggestions.</span></div>
+        <div class="field"><label>Tags</label><input type="text" name="tags" value="${esc((t.tags || []).join(', '))}" placeholder="comma separated"></div>
+      </div>
+      ${existing ? '' : `
+      <fieldset class="fieldset"><legend>Checklist (optional – drives the progress bar)</legend>
+        <div class="sub-editor" id="sub-editor">${(subs.length ? subs : ['']).map((s) => subLine(s)).join('')}</div>
+        <button class="btn sm ghost" type="button" data-x="add-sub" style="margin:8px 0 12px">+ Add item</button>
+      </fieldset>`}
+      <fieldset class="fieldset"><legend>GitHub link (optional – auto-updates progress & completion)</legend>
+        <div class="row">
+          <div class="field"><input type="text" name="ghRepo" list="form-repo-list" placeholder="owner/repo" value="${esc(t.github?.repo || '')}"></div>
+          <div class="field" style="flex:.6"><select name="ghType">${['issue', 'pr', 'milestone'].map((x) => `<option value="${x}" ${t.github?.type === x ? 'selected' : ''}>${{ issue: 'Issue', pr: 'Pull request', milestone: 'Milestone' }[x]}</option>`).join('')}</select></div>
+          <div class="field" style="flex:.5"><input type="number" name="ghNumber" placeholder="#" list="gh-items" value="${t.github?.number || ''}"></div>
+        </div>
+        <datalist id="form-repo-list">${(S.myRepos || []).map((r) => `<option value="${esc(r)}">`).join('')}</datalist>
+        <datalist id="gh-items"></datalist>
+        <div class="hint small muted" id="gh-hint" style="margin:-6px 0 12px"></div>
+      </fieldset>
+      <fieldset class="fieldset"><legend>Extra reminders</legend>
+        <div class="sub-editor" id="rem-editor">${reminders.map((r) => remLine(r)).join('')}</div>
+        <button class="btn sm ghost" type="button" data-x="add-rem" style="margin:8px 0 12px">+ Add reminder</button>
+      </fieldset>
+      <div class="error-text" id="task-err"></div>
+    </form>
+    <div class="modal-foot"><button class="btn" data-x="close">Cancel</button><button class="btn primary" data-x="save">${existing ? 'Save changes' : 'Create task'}</button></div>`, { wide: true });
+
+  loadMyRepos().then(() => {
+    const dl = $('#form-repo-list');
+    if (dl) dl.innerHTML = (S.myRepos || []).map((r) => `<option value="${esc(r)}">`).join('');
+  });
+
+  const form = $('#task-form');
+  let itemsCache = null;
+  const refreshItems = async () => {
+    const repo = form.ghRepo.value.trim();
+    if (!repo.includes('/')) return;
+    $('#gh-hint').textContent = 'Loading open items…';
+    try {
+      itemsCache = await api('githubRepoItems', repo);
+      fillItems();
+    } catch (err) {
+      $('#gh-hint').textContent = `⚠ ${err.message}`;
+      itemsCache = null;
+    }
+  };
+  const fillItems = () => {
+    if (!itemsCache) return;
+    const key = { issue: 'issues', pr: 'pulls', milestone: 'milestones' }[form.ghType.value];
+    const items = itemsCache[key];
+    $('#gh-items').innerHTML = items.map((i) => `<option value="${i.number}">#${i.number} ${esc(i.title)}</option>`).join('');
+    $('#gh-hint').textContent = items.length ? `${items.length} open ${key} – click the # field to pick one.` : `No open ${key} found in ${itemsCache.repo}.`;
+  };
+  form.ghRepo.addEventListener('change', refreshItems);
+  form.ghType.addEventListener('change', fillItems);
+  if (t.github?.repo) refreshItems();
+
+  m.onclick = async (e) => {
+    const x = e.target.closest('[data-x]')?.dataset.x;
+    if (x === 'close') closeModal();
+    if (x === 'add-sub') { $('#sub-editor').insertAdjacentHTML('beforeend', subLine('')); $('#sub-editor input:last-of-type')?.focus(); }
+    if (x === 'add-rem') $('#rem-editor').insertAdjacentHTML('beforeend', remLine({}));
+    if (x === 'del-line') e.target.closest('.line').remove();
+    if (x === 'save') form.requestSubmit();
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const data = {
+      title: fd.get('title'),
+      description: fd.get('description'),
+      assigneeId: fd.get('assigneeId') || assigneeId || me().id,
+      priority: fd.get('priority'),
+      deadline: fromLocalInput(fd.get('deadline')),
+      estimateHours: fd.get('estimateHours'),
+      category: fd.get('category'),
+      tags: String(fd.get('tags') || '').split(',').map((s) => s.trim()).filter(Boolean),
+      reminders: $$('#rem-editor .line').map((l) => ({ id: l.dataset.id || undefined, at: fromLocalInput($('input[name=remAt]', l).value), text: $('input[name=remText]', l).value, sent: false })).filter((r) => r.at),
+      github: fd.get('ghRepo') ? { repo: fd.get('ghRepo'), type: fd.get('ghType'), number: fd.get('ghNumber') } : null,
+    };
+    if (!existing) data.subtasks = $$('#sub-editor input').map((i) => ({ text: i.value })).filter((s) => s.text.trim());
+    if (existing) {
+      // Keep GitHub link untouched if unchanged, so sync state isn't reset.
+      const g = existing.github;
+      if (g && data.github && g.repo === data.github.repo && g.type === data.github.type && String(g.number) === String(data.github.number)) delete data.github;
+    }
+    try {
+      const saved = existing ? await api('updateTask', existing.id, data) : await api('createTask', data);
+      closeModal();
+      toast(existing ? 'Task updated' : `Task created${data.assigneeId !== me().id ? ` and assigned to ${user(data.assigneeId)?.name}` : ''}`, 'success');
+      if (!existing) openTask(saved.id);
+    } catch (err) {
+      $('#task-err').textContent = err.message;
+    }
+  };
+}
+
+function subLine(text) {
+  return `<div class="line"><input type="text" value="${esc(text)}" placeholder="Checklist item"><button class="btn sm ghost" type="button" data-x="del-line">✕</button></div>`;
+}
+
+function remLine(r) {
+  return `<div class="line" data-id="${esc(r.id || '')}"><input type="datetime-local" name="remAt" value="${toLocalInput(r.at)}" style="width:220px"><input type="text" name="remText" value="${esc(r.text || '')}" placeholder="Reminder text, e.g. Confirm sponsor logos"><button class="btn sm ghost" type="button" data-x="del-line">✕</button></div>`;
+}
