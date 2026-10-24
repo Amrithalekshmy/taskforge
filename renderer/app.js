@@ -557,3 +557,66 @@ function managerOverview() {
       </div>
     </div>`;
 }
+
+// ============================================================ tasks page
+function scopedTasks() {
+  const f = S.tasks;
+  let list = S.data.tasks;
+  if (f.scope === 'mine') list = list.filter((t) => t.assigneeId === me().id);
+  else if (f.scope === 'assigned') list = list.filter((t) => t.assignedById === me().id && t.assigneeId !== me().id);
+  else if (f.scope === 'team') list = list.filter((t) => t.assigneeId !== me().id);
+  if (f.person) list = list.filter((t) => t.assigneeId === f.person);
+  if (f.q) {
+    const q = f.q.toLowerCase();
+    list = list.filter((t) => `${t.title} ${t.description} ${t.tags.join(' ')} ${t.github?.repo || ''} ${user(t.assigneeId)?.name || ''}`.toLowerCase().includes(q));
+  }
+  return list;
+}
+
+function pageTasks() {
+  const f = S.tasks;
+  const base = scopedTasks();
+  const byStatus = {
+    active: base.filter((t) => t.status !== 'done'),
+    todo: base.filter((t) => t.status === 'todo'),
+    in_progress: base.filter((t) => t.status === 'in_progress'),
+    review: base.filter((t) => t.status === 'review'),
+    done: base.filter((t) => t.status === 'done'),
+    overdue: base.filter(isOverdue),
+    all: base,
+  };
+  const scopes = [['mine', 'Assigned to me']];
+  if (isManager() || S.data.tasks.some((t) => t.assignedById === me().id && t.assigneeId !== me().id)) scopes.push(['assigned', 'Assigned by me']);
+  if (isManager()) scopes.push(['team', me().role === 'chair' ? 'Everyone else' : 'My team']);
+  const people = S.data.users.filter((u) => canManageUser(u.id));
+  const list = sortTasks(byStatus[f.status] || base);
+
+  let body;
+  if (f.view === 'board') {
+    body = `<div class="board">${Object.keys(STATUS).map((s) => {
+      const col = sortTasks(base.filter((t) => t.status === s));
+      return `<div class="column" data-status="${s}">
+        <div class="column-head"><span class="dot" style="background:${STATUS_COLOR[s]}"></span>${STATUS[s]}<span class="n">${col.length}</span></div>
+        ${col.map((t) => taskCard(t, { draggable: canWorkTask(t) })).join('') || '<div class="empty small">Drop tasks here</div>'}
+      </div>`;
+    }).join('')}</div>`;
+  } else {
+    body = list.length ? `<div class="task-list">${list.map((t) => taskCard(t)).join('')}</div>`
+      : empty('🗂', f.q ? 'No tasks match your search.' : 'No tasks here yet.', '<button class="btn primary" data-action="new-task">+ New task</button>');
+  }
+
+  return `
+    <div class="toolbar">
+      <div class="seg">${scopes.map(([k, l]) => `<button class="${f.scope === k ? 'on' : ''}" data-action="task-scope" data-v="${k}">${l}</button>`).join('')}</div>
+      ${f.scope !== 'mine' && people.length > 1 ? `<select data-change="task-person"><option value="">Everyone</option>${people.map((u) => `<option value="${u.id}" ${f.person === u.id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}
+      <input type="search" id="task-search" placeholder="Search tasks, repos, people…" value="${esc(f.q)}" style="width:240px">
+      <span style="flex:1"></span>
+      <div class="seg">
+        <button class="${f.view === 'list' ? 'on' : ''}" data-action="task-view" data-v="list">▤ Cards</button>
+        <button class="${f.view === 'board' ? 'on' : ''}" data-action="task-view" data-v="board">▥ Board</button>
+      </div>
+    </div>
+    ${f.view === 'list' ? `<div class="toolbar"><div class="seg">${[['active', 'Active'], ['todo', 'To do'], ['in_progress', 'In progress'], ['review', 'Review'], ['overdue', 'Overdue'], ['done', 'Done'], ['all', 'All']]
+      .map(([k, l]) => `<button class="${f.status === k ? 'on' : ''}" data-action="task-status" data-v="${k}">${l}<span class="n">${byStatus[k].length}</span></button>`).join('')}</div></div>` : ''}
+    ${body}`;
+}
