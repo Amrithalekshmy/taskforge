@@ -581,6 +581,53 @@ class Service {
     }
     return created;
   }
+
+  // ---------- settings ----------
+  updateSettings(patch) {
+    const me = this.me();
+    if (me.role !== 'chair') throw new PermissionError('Only the chairperson can change workspace settings');
+    const s = this.store.settings;
+    if ('githubSyncMinutes' in patch) s.githubSyncMinutes = Math.max(1, Number(patch.githubSyncMinutes) || 5);
+    if ('reminderLeadHours' in patch) s.reminderLeadHours = Math.max(1, Number(patch.reminderLeadHours) || 24);
+    if ('keepRunningInTray' in patch) s.keepRunningInTray = !!patch.keepRunningInTray;
+    if ('anthropicKey' in patch) s.anthropicKey = patch.anthropicKey ? encryptSecret(patch.anthropicKey.trim()) : null;
+    if ('orgName' in patch && patch.orgName?.trim()) this.store.data.orgName = patch.orgName.trim();
+    this.commit();
+  }
+
+  // ---------- reminders (called by the scheduler) ----------
+  checkReminders(now = Date.now()) {
+    const lead = this.store.settings.reminderLeadHours * 3600000;
+    let changed = false;
+    for (const t of this.store.tasks) {
+      if (t.status === 'done') continue;
+      const people = new Set([t.assigneeId, t.assignedById]);
+      if (t.deadline) {
+        const due = Date.parse(t.deadline);
+        if (!t.deadlineReminded && due > now && due - now <= lead) {
+          const hrs = Math.max(1, Math.round((due - now) / 3600000));
+          for (const uid of people) this.notify(uid, `⏰ "${t.title}" is due in ${hrs}h (${t.progress}% done)`, { taskId: t.id, kind: 'deadline' });
+          t.deadlineReminded = true;
+          changed = true;
+        }
+        if (!t.overdueNotified && due <= now) {
+          people.add(this.store.team(t.teamId)?.headId);
+          for (const uid of people) this.notify(uid, `🚨 "${t.title}" is overdue (${t.progress}% done)`, { taskId: t.id, kind: 'overdue' });
+          t.overdueNotified = true;
+          t.deadlineReminded = true;
+          changed = true;
+        }
+      }
+      for (const r of t.reminders || []) {
+        if (!r.sent && Date.parse(r.at) <= now) {
+          for (const uid of people) this.notify(uid, `🔔 ${r.text || 'Reminder'} – "${t.title}"`, { taskId: t.id, kind: 'reminder' });
+          r.sent = true;
+          changed = true;
+        }
+      }
+    }
+    if (changed) this.commit();
+  }
 }
 
 function clamp(n) {
