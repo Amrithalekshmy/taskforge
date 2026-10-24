@@ -160,3 +160,42 @@ async function run(fn, okMsg) {
     throw err;
   }
 }
+
+// ============================================================ state
+const S = {
+  data: null,
+  page: 'dashboard',
+  memberId: null,
+  drawerTaskId: null,
+  notifOpen: false,
+  tasks: { scope: 'mine', status: 'active', view: 'list', person: '', q: '' },
+  cal: { y: new Date().getFullYear(), m: new Date().getMonth() },
+  gh: {}, // userId -> { loading, data, error }
+  myRepos: null,
+};
+
+const me = () => S.data.me;
+const user = (id) => S.data.users.find((u) => u.id === id);
+const team = (id) => S.data.teams.find((t) => t.id === id);
+const task = (id) => S.data.tasks.find((t) => t.id === id);
+const isManager = () => me().role !== 'member';
+const canManageUser = (id) => S.data.managedUserIds.includes(id);
+const canManageTask = (t) => me().role === 'chair' || t.assignedById === me().id ||
+  (t.assigneeId !== me().id && me().role === 'head' && (team(t.teamId)?.headId === me().id || canManageUser(t.assigneeId)));
+const canWorkTask = (t) => t.assigneeId === me().id || canManageTask(t);
+const teamsIHead = () => S.data.teams.filter((t) => me().role === 'chair' || t.headId === me().id);
+
+async function refresh() {
+  const st = await api('status');
+  if (!st.user) {
+    S.data = null;
+    return renderAuth(st.needsSetup);
+  }
+  S.data = await api('bootstrap');
+  render();
+  if (S.drawerTaskId) {
+    const active = document.activeElement;
+    const typing = active && $('#drawer-root').contains(active) && /INPUT|TEXTAREA|SELECT/.test(active.tagName);
+    if (!typing) renderDrawer();
+  }
+}
