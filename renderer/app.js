@@ -1081,3 +1081,28 @@ async function loadMyRepos() {
     if (dl) dl.innerHTML = S.myRepos.map((r) => `<option value="${esc(r)}">`).join('');
   } catch {}
 }
+
+// ============================================================ modals
+function openModal(html, { wide = false } = {}) {
+  $('#modal-root').innerHTML = `<div class="modal-backdrop"><div class="modal ${wide ? 'wide' : ''}">${html}</div></div>`;
+  const first = $('#modal-root input:not([type=hidden]), #modal-root textarea');
+  if (first) first.focus();
+  return $('#modal-root .modal');
+}
+
+function closeModal() {
+  $('#modal-root').innerHTML = '';
+}
+
+function confirmModal(title, text, okLabel = 'Confirm', danger = false) {
+  return new Promise((resolve) => {
+    const m = openModal(`<div class="modal-head"><div class="grow"><h2>${esc(title)}</h2><p>${esc(text)}</p></div></div>
+      <div class="modal-foot"><button class="btn" data-x="no">Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" data-x="yes">${esc(okLabel)}</button></div>`);
+    m.onclick = (e) => {
+      const x = e.target.closest('[data-x]')?.dataset.x;
+      if (!x) return;
+      closeModal();
+      resolve(x === 'yes');
+    };
+  });
+}
