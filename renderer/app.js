@@ -244,3 +244,110 @@ function renderAuth(needsSetup) {
     }
   };
 }
+
+// ============================================================ shell
+const NAV = () => {
+  const items = [
+    ['dashboard', '◉', 'Dashboard'],
+    ['tasks', '☰', 'Tasks', S.data.tasks.filter((t) => t.assigneeId === me().id && t.status !== 'done').length],
+    ['calendar', '▦', 'Calendar'],
+  ];
+  const manage = [];
+  if (me().role === 'chair') manage.push(['org', '⌂', 'Organisation']);
+  if (isManager()) manage.push(['team', '⚇', me().role === 'chair' ? 'All teams' : 'My team']);
+  return { items, manage };
+};
+
+const PAGE_TITLES = {
+  dashboard: ['Dashboard', 'Your overview'],
+  tasks: ['Tasks', 'Track, update and time your work'],
+  calendar: ['Calendar', 'Deadlines at a glance'],
+  org: ['Organisation', 'Teams, heads and members'],
+  team: ['Teams', 'See how everyone is doing'],
+  member: ['Person', 'Progress and GitHub activity'],
+  profile: ['My profile', 'Your progress and GitHub'],
+  settings: ['Settings', 'Account and workspace'],
+};
+
+function render() {
+  const { items, manage } = NAV();
+  const unread = S.data.notifications.filter((n) => !n.read).length;
+  const navBtn = ([id, ico, label, count]) => `
+    <button class="nav-item ${S.page === id ? 'active' : ''}" data-action="nav" data-page="${id}">
+      <span class="ico">${ico}</span>${label}${count ? `<span class="count">${count}</span>` : ''}
+    </button>`;
+  const [title, crumb] = S.page === 'member' && user(S.memberId)
+    ? [user(S.memberId).name, `${ROLE_LABEL[user(S.memberId).role]}${team(user(S.memberId).teamId) ? ` · ${team(user(S.memberId).teamId).name}` : ''}`]
+    : PAGE_TITLES[S.page];
+
+  const scrollTop = $('.content')?.scrollTop || 0;
+  $('#app').innerHTML = `
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand"><div class="brand-logo">✓</div><div>TaskForge<div class="org">${esc(S.data.orgName)}</div></div></div>
+        ${items.map(navBtn).join('')}
+        ${manage.length ? `<div class="nav-label">Manage</div>${manage.map(navBtn).join('')}` : ''}
+        <div class="nav-label">You</div>
+        ${navBtn(['profile', '☺', 'My profile'])}
+        ${navBtn(['settings', '⚙', 'Settings'])}
+        <div class="spacer"></div>
+        <div class="me-chip" data-action="nav" data-page="profile">
+          ${avatar(me())}
+          <div class="who"><b>${esc(me().name)}</b><span class="role-badge role-${me().role}">${ROLE_LABEL[me().role]}</span></div>
+        </div>
+      </aside>
+      <main class="main">
+        <div class="topbar">
+          <div><h2>${esc(title)}</h2><div class="crumb">${esc(crumb)}</div></div>
+          <div class="grow"></div>
+          <button class="btn ghost" data-action="sync-all" data-tip="Sync all GitHub-linked tasks now">⟳ Sync GitHub</button>
+          <button class="btn bell" data-action="toggle-notifs">🔔${unread ? `<span class="dot">${unread > 99 ? '99+' : unread}</span>` : ''}</button>
+          <button class="btn primary" data-action="new-task">+ New task</button>
+        </div>
+        <div class="content">${renderPage()}</div>
+      </main>
+    </div>
+    ${S.notifOpen ? renderNotifPanel() : ''}`;
+  $('.content').scrollTop = scrollTop;
+  afterRender();
+}
+
+function renderPage() {
+  switch (S.page) {
+    case 'dashboard': return pageDashboard();
+    case 'tasks': return pageTasks();
+    case 'calendar': return pageCalendar();
+    case 'org': return pageOrg();
+    case 'team': return pageTeam();
+    case 'member': return pageMember(S.memberId);
+    case 'profile': return pageMember(me().id);
+    case 'settings': return pageSettings();
+    default: return '';
+  }
+}
+
+function afterRender() {
+  // Lazy-load GitHub panels.
+  for (const el of $$('[data-gh-panel]')) loadGithubPanel(el.dataset.ghPanel);
+  // Board drag & drop.
+  for (const card of $$('.column .task-card[draggable=true]')) {
+    card.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/plain', card.dataset.id));
+  }
+  for (const col of $$('.column')) {
+    col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('drag-over'); });
+    col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
+    col.addEventListener('drop', (e) => {
+      e.preventDefault();
+      col.classList.remove('drag-over');
+      const id = e.dataTransfer.getData('text/plain');
+      const t = task(id);
+      if (t && t.status !== col.dataset.status) run(() => api('updateTask', id, { status: col.dataset.status }));
+    });
+  }
+  const search = $('#task-search');
+  if (search && S.tasks._focusSearch) {
+    search.focus();
+    search.setSelectionRange(search.value.length, search.value.length);
+    S.tasks._focusSearch = false;
+  }
+}
