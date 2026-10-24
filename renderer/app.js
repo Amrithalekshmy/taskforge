@@ -571,24 +571,29 @@ function pageDashboard() {
   const due24 = active.filter((t) => t.deadline && Date.parse(t.deadline) - Date.now() < DAY && !isOverdue(t)).length;
 
   const upcoming = sortTasks(S.data.tasks.filter((t) => t.status !== 'done' && t.deadline && Date.parse(t.deadline) - Date.now() < 7 * DAY)).slice(0, 8);
+  const open = S.data.tasks.filter((t) => t.status !== 'done' && t.deadline);
+  const orgOverdue = open.filter(isOverdue).length;
+  const orgWeek = open.filter((t) => !isOverdue(t) && Date.parse(t.deadline) - Date.now() < 7 * DAY).length;
+  const codes = S.data.settings.codes;
 
   return `
     <div class="hero">
       <div class="grow">
         <h1>${greet}, ${esc(me().name.split(' ')[0])} 👋</h1>
-        <p>You have <b>${st.active}</b> active task${st.active === 1 ? '' : 's'}${due24 ? `, <b>${due24}</b> due in the next 24 hours` : ''}${st.overdue ? ` and <b style="color:#ff8a8a">${st.overdue} overdue</b>` : ''}.</p>
+        <p>You have <b>${st.active}</b> active task${st.active === 1 ? '' : 's'} of your own${due24 ? `, <b>${due24}</b> due in the next 24 hours` : ''}${st.overdue ? ` and <b style="color:#ff8a8a">${st.overdue} overdue</b>` : ''}.</p>
+        ${isManager() ? `<p>${me().role === 'chair' ? 'Across the organisation' : 'Across your team'}: <b>${orgWeek}</b> deadline${orgWeek === 1 ? '' : 's'} this week${orgOverdue ? `, <b style="color:#ff8a8a">${orgOverdue} overdue</b>` : ''}.</p>` : ''}
       </div>
       <button class="btn primary" data-action="new-task">+ New task</button>
     </div>
+    ${me().role === 'chair' && (!codes.chair || !codes.head) ? `
+    <div class="suggest" style="margin-bottom:18px;background:rgba(250,178,25,.08);border-color:rgba(250,178,25,.5);color:var(--warning)">
+      <span>🔐</span><span class="grow">Set the ${!codes.chair && !codes.head ? 'Chairperson and Head codes' : !codes.chair ? 'Chairperson code' : 'Head code'} so people can sign up for those roles. Until then they can only join as members.</span>
+      <button class="btn sm" data-action="nav" data-page="settings">Set codes</button></div>` : ''}
 
     <div class="grid cols-4">
       ${statTile('Active tasks', st.active, `${st.overdue} overdue`, '☰')}
       ${statTile('Due this week', active.filter((t) => t.deadline && Date.parse(t.deadline) - Date.now() < 7 * DAY).length, 'including overdue', '📅')}
       ${statTile('Completed this week', st.doneThisWeek, `${st.done} completed all-time`, '✓')}
-    ${me().role === 'chair' && (!codes.chair || !codes.head) ? `
-    <div class="suggest" style="margin-bottom:18px;background:rgba(250,178,25,.08);border-color:rgba(250,178,25,.5);color:var(--warning)">
-      <span>🔐</span><span class="grow">Set the ${!codes.chair && !codes.head ? 'Chairperson and Head codes' : !codes.chair ? 'Chairperson code' : 'Head code'} so people can sign up for those roles. Until then they can only join as members.</span>
-      <button class="btn sm" data-action="nav" data-page="settings">Set codes</button></div>` : ''}
       ${statTile('Time this week', fmtDur(st.weekMin), `${fmtDur(st.totalMin)} all-time`, '⏱')}
     </div>
 
@@ -602,19 +607,20 @@ function pageDashboard() {
           <div class="task-list">${[...new Set([...suggestions, ...dueSoon])].slice(0, 6).map((t) => taskCard(t)).join('')}</div>
         </div>` : ''}
         <div class="card">
-          <div class="card-head"><h3>My active work</h3><button class="btn sm ghost" data-action="nav" data-page="tasks">View all →</button></div>
-          <div class="compact-list">${active.length ? active.slice(0, 10).map(compactRow).join('') : empty('🎉', 'Nothing on your plate. Enjoy!')}</div>
+          <div class="card-head"><h3>My tasks</h3><button class="btn sm ghost" data-action="tasks-mine">View all →</button></div>
+          <div class="compact-list">${active.length ? active.slice(0, 10).map(compactRow).join('') : empty('🎉', 'Nothing on your plate.', '<button class="btn sm" data-action="new-task">+ Add a task for yourself</button>')}</div>
         </div>
       </div>
       <div class="stack">
+        ${isManager() ? `
+        <div class="card">
+          <div class="card-head"><h3>${me().role === 'chair' ? '📅 All deadlines' : '📅 Team deadlines'}</h3><button class="btn sm ghost" data-action="deadline-list">Full list →</button></div>
+          ${deadlineGroupsHtml(open, 12)}
+        </div>` : `
         <div class="card">
           <div class="card-head"><h3>Upcoming deadlines</h3><span class="sub">next 7 days</span></div>
-          ${upcoming.length ? upcoming.map((t) => `
-            <div class="feed-item" data-action="open-task" data-id="${t.id}" style="cursor:pointer">
-              ${avatar(user(t.assigneeId), 'sm')}<div style="min-width:0"><div style="color:var(--text)">${esc(t.title)}</div><div class="small muted">${esc(user(t.assigneeId)?.name || '')} · ${t.progress}%</div></div>
-              <span class="when">${deadlineChip(t)}</span>
-            </div>`).join('') : empty('🗓', 'No deadlines this week')}
-        </div>
+          ${upcoming.length ? upcoming.map(deadlineRow).join('') : empty('🗓', 'No deadlines this week')}
+        </div>`}
         <div class="card">
           <div class="card-head"><h3>Recent activity</h3></div>
           ${S.data.activity.length ? S.data.activity.slice(0, 12).map((a) => `
@@ -624,6 +630,46 @@ function pageDashboard() {
         </div>
       </div>
     </div>`;
+}
+
+function deadlineRow(t) {
+  const tm = team(t.teamId);
+  return `<div class="feed-item" data-action="open-task" data-id="${t.id}" style="cursor:pointer">
+    ${avatar(user(t.assigneeId), 'sm')}
+    <div style="min-width:0"><div style="color:var(--text)">${esc(t.title)}</div>
+      <div class="small muted flex">${esc(user(t.assigneeId)?.name || 'Unassigned')}${t.assigneeId === me().id ? ' (you)' : ''}
+        ${tm ? `<span class="team-dot" style="background:${tm.color};width:8px;height:8px"></span>${esc(tm.name)}` : ''} · ${t.progress}%</div></div>
+    <span class="when">${deadlineChip(t)}</span>
+  </div>`;
+}
+
+// Splits open tasks with deadlines into Overdue / Today / This week / Later.
+function deadlineGroups(tasks) {
+  const now = Date.now();
+  const endToday = new Date().setHours(23, 59, 59, 999);
+  const groups = [
+    ['⚠ Overdue', 'critical', (d) => d < now],
+    ['Today', 'serious', (d) => d <= endToday],
+    ['Next 7 days', 'warning', (d) => d - now < 7 * DAY],
+    ['Later', '', () => true],
+  ].map(([label, cls, test]) => ({ label, cls, test, items: [] }));
+  for (const t of sortTasks(tasks.filter((x) => x.status !== 'done' && x.deadline))) {
+    groups.find((g) => g.test(Date.parse(t.deadline))).items.push(t);
+  }
+  return groups.filter((g) => g.items.length);
+}
+
+function deadlineGroupsHtml(tasks, limit = Infinity) {
+  const groups = deadlineGroups(tasks);
+  if (!groups.length) return empty('🗓', 'No upcoming deadlines');
+  let left = limit;
+  return groups.map((g) => {
+    if (left <= 0) return '';
+    const shown = g.items.slice(0, left);
+    left -= shown.length;
+    return `<div class="section-title" style="margin:12px 0 2px">${g.label}<span class="chip ${g.cls}">${g.items.length}</span></div>
+      ${shown.map(deadlineRow).join('')}${shown.length < g.items.length ? `<div class="small muted" style="padding:6px 0">+${g.items.length - shown.length} more</div>` : ''}`;
+  }).join('');
 }
 
 function statTile(label, value, foot, ico) {
@@ -731,14 +777,46 @@ function pageTasks() {
 }
 
 // ============================================================ calendar
+function calendarTasks() {
+  const c = S.cal;
+  return S.data.tasks.filter((t) =>
+    (!c.mine || t.assigneeId === me().id) &&
+    (!c.team || t.teamId === c.team) &&
+    (!c.person || t.assigneeId === c.person));
+}
+
+function calendarToolbar() {
+  const c = S.cal;
+  const people = S.data.users.filter((u) => canManageUser(u.id));
+  const teams = teamsIHead();
+  return `<div class="toolbar">
+    <div class="seg"><button class="${c.view !== 'list' ? 'on' : ''}" data-action="cal-view" data-v="month">▦ Month</button>
+      <button class="${c.view === 'list' ? 'on' : ''}" data-action="cal-view" data-v="list">☰ All deadlines</button></div>
+    ${isManager() ? `
+      ${teams.length > 1 ? `<select data-change="cal-team" style="width:auto"><option value="">All teams</option>${teams.map((t) => `<option value="${t.id}" ${c.team === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select>` : ''}
+      <select data-change="cal-person" style="width:auto"><option value="">Everyone</option>${people.map((u) => `<option value="${u.id}" ${c.person === u.id ? 'selected' : ''}>${esc(u.name)}${u.id === me().id ? ' (me)' : ''}</option>`).join('')}</select>
+      <label class="flex small"><input type="checkbox" data-change="cal-mine" ${c.mine ? 'checked' : ''}> My tasks only</label>` : ''}
+  </div>`;
+}
+
 function pageCalendar() {
+  if (S.cal.view === 'list') {
+    const tasks = calendarTasks();
+    const undated = tasks.filter((t) => t.status !== 'done' && !t.deadline);
+    return `${calendarToolbar()}
+      <div class="grid main-side">
+        <div class="card">${deadlineGroupsHtml(tasks)}</div>
+        <div class="card"><div class="card-head"><h3>No deadline set</h3><span class="sub">${undated.length} open</span></div>
+          ${undated.length ? sortTasks(undated).map(deadlineRow).join('') : empty('✓', 'Every open task has a deadline')}</div>
+      </div>`;
+  }
   const { y, m } = S.cal;
   const first = new Date(y, m, 1);
   const start = new Date(first);
   start.setDate(1 - ((first.getDay() + 6) % 7));
   const today = new Date().toDateString();
   const byDay = {};
-  for (const t of S.data.tasks) {
+  for (const t of calendarTasks()) {
     if (!t.deadline) continue;
     const k = new Date(t.deadline).toDateString();
     (byDay[k] ||= []).push(t);
@@ -751,11 +829,11 @@ function pageCalendar() {
     cells.push(`<div class="day ${d.getMonth() !== m ? 'other' : ''} ${d.toDateString() === today ? 'today' : ''}">
       <div class="n">${d.getDate()}</div>
       ${items.slice(0, 4).map((t) => `<div class="ev ${t.status === 'done' ? 'done' : ''} ${isOverdue(t) ? 'overdue' : ''}" data-action="open-task" data-id="${t.id}"
-          data-tip="${esc(t.title)} · ${esc(user(t.assigneeId)?.name || '')} · ${t.progress}%">${esc(t.title)}</div>`).join('')}
+          data-tip="${esc(t.title)} · ${esc(user(t.assigneeId)?.name || '')} · ${t.progress}%">${isManager() ? `<b>${esc(initials(user(t.assigneeId)?.name))}</b> ` : ''}${esc(t.title)}</div>`).join('')}
       ${items.length > 4 ? `<div class="small muted">+${items.length - 4} more</div>` : ''}
     </div>`);
   }
-  return `
+  return `${calendarToolbar()}
     <div class="toolbar">
       <button class="btn" data-action="cal-move" data-v="-1">‹</button>
       <h3 style="min-width:180px;text-align:center">${first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</h3>
@@ -1009,6 +1087,15 @@ function pageSettings() {
           <input type="password" name="anthropicKey" placeholder="${s.aiConfigured ? '•••••••• configured – type to replace' : 'sk-ant-…'}">
           <span class="hint">When a task for an event is completed, Claude searches the web and suggests next steps (sponsor follow-ups, reports, recaps…). Without a key a built-in checklist is used.</span></div>
         <label class="flex" style="margin-bottom:16px"><input type="checkbox" name="keepRunningInTray" ${s.keepRunningInTray ? 'checked' : ''}> Keep running in the system tray when the window is closed (so reminders still fire)</label>
+        <fieldset class="fieldset"><legend>🔐 Sign-up codes</legend>
+          <p class="small muted" style="margin-top:0;line-height:1.5">People need these codes to sign up as a Head or Chairperson. Codes are stored as one-way hashes, so they can't be shown again – type a new one to change it.</p>
+          <div class="row">
+            <div class="field"><label>👑 Chairperson code ${s.codes.chair ? '<span class="chip good">✓ set</span>' : '<span class="chip warning">⚠ not set</span>'}</label>
+              <input type="password" name="chairCode" minlength="4" autocomplete="new-password" placeholder="${s.codes.chair ? 'Type to replace' : 'Set a code'}"></div>
+            <div class="field"><label>🧭 Head code ${s.codes.head ? '<span class="chip good">✓ set</span>' : '<span class="chip warning">⚠ not set</span>'}</label>
+              <input type="password" name="headCode" minlength="4" autocomplete="new-password" placeholder="${s.codes.head ? 'Type to replace' : 'Set a code'}"></div>
+          </div>
+        </fieldset>
         <div class="flex"><button class="btn primary" type="submit">Save settings</button>${s.aiConfigured ? '<button class="btn ghost" type="button" data-action="clear-ai-key">Remove API key</button>' : ''}</div>
       </form>` : `<div class="card"><div class="card-head"><h3>Reminders</h3></div><p class="muted">You'll get a desktop notification ${s.reminderLeadHours}h before each deadline, when something is overdue, and for any custom reminders on your tasks.</p></div>`}
     </div>`;
@@ -1087,15 +1174,6 @@ function renderDrawer() {
             <span class="k">Assignee</span><span>${person(user(t.assigneeId))}</span>
             <span class="k">Assigned by</span><span>${person(user(t.assignedById))}</span>
             <span class="k">Team</span><span>${team(t.teamId) ? `<span class="flex"><span class="team-dot" style="background:${team(t.teamId).color}"></span>${esc(team(t.teamId).name)}</span>` : '—'}</span>
-        <fieldset class="fieldset"><legend>🔐 Sign-up codes</legend>
-          <p class="small muted" style="margin-top:0;line-height:1.5">People need these codes to sign up as a Head or Chairperson. Codes are stored as one-way hashes, so they can't be shown again – type a new one to change it.</p>
-          <div class="row">
-            <div class="field"><label>👑 Chairperson code ${s.codes.chair ? '<span class="chip good">✓ set</span>' : '<span class="chip warning">⚠ not set</span>'}</label>
-              <input type="password" name="chairCode" minlength="4" autocomplete="new-password" placeholder="${s.codes.chair ? 'Type to replace' : 'Set a code'}"></div>
-            <div class="field"><label>🧭 Head code ${s.codes.head ? '<span class="chip good">✓ set</span>' : '<span class="chip warning">⚠ not set</span>'}</label>
-              <input type="password" name="headCode" minlength="4" autocomplete="new-password" placeholder="${s.codes.head ? 'Type to replace' : 'Set a code'}"></div>
-          </div>
-        </fieldset>
             <span class="k">Deadline</span><span>${fmtDate(t.deadline)}</span>
             <span class="k">Time</span><span>${fmtDur(total)} logged${t.estimateHours ? ` of ${t.estimateHours}h estimated` : ''}</span>
             ${t.completedAt ? `<span class="k">Completed</span><span>${fmtDate(t.completedAt)}</span>` : ''}
@@ -1594,13 +1672,13 @@ const actions = {
   'task-view': (el) => { S.tasks.view = el.dataset.v; render(); },
   'cal-move': (el) => {
     const v = Number(el.dataset.v);
-    if (v === 0) S.cal = { y: new Date().getFullYear(), m: new Date().getMonth() };
-    else {
-      const d = new Date(S.cal.y, S.cal.m + v, 1);
-      S.cal = { y: d.getFullYear(), m: d.getMonth() };
-    }
+    const d = v === 0 ? new Date() : new Date(S.cal.y, S.cal.m + v, 1);
+    S.cal = { ...S.cal, y: d.getFullYear(), m: d.getMonth() };
     render();
   },
+  'cal-view': (el) => { S.cal.view = el.dataset.v; render(); },
+  'deadline-list': () => { S.page = 'calendar'; S.cal.view = 'list'; render(); },
+  'tasks-mine': () => { S.page = 'tasks'; S.tasks.scope = 'mine'; S.tasks.person = ''; render(); },
   'toggle-notifs': () => {
     S.notifOpen = !S.notifOpen;
     render();
@@ -1621,6 +1699,9 @@ const actions = {
   logout: async () => {
     await api('logout');
     S.page = 'dashboard';
+    S.authTab = 'login';
+    Object.assign(S.cal, { team: '', person: '', mine: false });
+    Object.assign(S.tasks, { scope: 'mine', person: '', q: '' });
     S.gh = {};
     S.myRepos = null;
     closeDrawer();
@@ -1630,6 +1711,9 @@ const actions = {
 
 const changes = {
   'task-person': (el) => { S.tasks.person = el.value; render(); },
+  'cal-team': (el) => { S.cal.team = el.value; render(); },
+  'cal-person': (el) => { S.cal.person = el.value; render(); },
+  'cal-mine': (el) => { S.cal.mine = el.checked; render(); },
   'progress-mode': (el) => run(() => api('updateTask', el.dataset.id, { progressMode: el.value })),
   progress: (el) => run(() => api('updateTask', el.dataset.id, { progress: Number(el.value) })),
   subtask: (el) => {
@@ -1709,6 +1793,8 @@ document.addEventListener('submit', async (e) => {
       keepRunningInTray: fd.get('keepRunningInTray') === 'on',
     };
     if (fd.get('anthropicKey')) patch.anthropicKey = fd.get('anthropicKey');
+    if (fd.get('chairCode')) patch.chairCode = fd.get('chairCode');
+    if (fd.get('headCode')) patch.headCode = fd.get('headCode');
     run(() => api('updateSettings', patch), 'Settings saved');
   }
 });
@@ -1764,5 +1850,3 @@ window.taskforge.on('task-completed', ({ taskId, looksLikeEvent }) => {
 });
 
 refresh();
-    if (fd.get('chairCode')) patch.chairCode = fd.get('chairCode');
-    if (fd.get('headCode')) patch.headCode = fd.get('headCode');
