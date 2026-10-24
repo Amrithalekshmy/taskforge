@@ -620,3 +620,40 @@ function pageTasks() {
       .map(([k, l]) => `<button class="${f.status === k ? 'on' : ''}" data-action="task-status" data-v="${k}">${l}<span class="n">${byStatus[k].length}</span></button>`).join('')}</div></div>` : ''}
     ${body}`;
 }
+
+// ============================================================ calendar
+function pageCalendar() {
+  const { y, m } = S.cal;
+  const first = new Date(y, m, 1);
+  const start = new Date(first);
+  start.setDate(1 - ((first.getDay() + 6) % 7));
+  const today = new Date().toDateString();
+  const byDay = {};
+  for (const t of S.data.tasks) {
+    if (!t.deadline) continue;
+    const k = new Date(t.deadline).toDateString();
+    (byDay[k] ||= []).push(t);
+  }
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start);
+    d.setDate(start.getDate() + i);
+    const items = sortTasks(byDay[d.toDateString()] || []);
+    cells.push(`<div class="day ${d.getMonth() !== m ? 'other' : ''} ${d.toDateString() === today ? 'today' : ''}">
+      <div class="n">${d.getDate()}</div>
+      ${items.slice(0, 4).map((t) => `<div class="ev ${t.status === 'done' ? 'done' : ''} ${isOverdue(t) ? 'overdue' : ''}" data-action="open-task" data-id="${t.id}"
+          data-tip="${esc(t.title)} · ${esc(user(t.assigneeId)?.name || '')} · ${t.progress}%">${esc(t.title)}</div>`).join('')}
+      ${items.length > 4 ? `<div class="small muted">+${items.length - 4} more</div>` : ''}
+    </div>`);
+  }
+  return `
+    <div class="toolbar">
+      <button class="btn" data-action="cal-move" data-v="-1">‹</button>
+      <h3 style="min-width:180px;text-align:center">${first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</h3>
+      <button class="btn" data-action="cal-move" data-v="1">›</button>
+      <button class="btn ghost" data-action="cal-move" data-v="0">Today</button>
+      <span style="flex:1"></span>
+      <span class="chip critical">⚠ overdue</span><span class="chip good">✓ done</span><span class="chip accent">◷ upcoming</span>
+    </div>
+    <div class="cal">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => `<div class="dow">${d}</div>`).join('')}${cells.join('')}</div>`;
+}
