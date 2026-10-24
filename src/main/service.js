@@ -417,6 +417,43 @@ class Service {
     this.commit();
     return t;
   }
+
+  // ---------- time tracking ----------
+  toggleTimer(id) {
+    const me = this.me();
+    const t = this.store.task(id);
+    if (!t || !this.canWork(me, t)) throw new PermissionError('Not allowed');
+    if (t.timer && t.timer.userId === me.id) {
+      this._stopTimer(t);
+    } else {
+      // Only one running timer per person.
+      for (const other of this.store.tasks) if (other.timer?.userId === me.id) this._stopTimer(other);
+      t.timer = { userId: me.id, start: new Date().toISOString() };
+      if (t.status === 'todo') t.status = 'in_progress';
+    }
+    this.commit();
+    return t;
+  }
+
+  _stopTimer(t) {
+    if (!t.timer) return;
+    const end = new Date();
+    const minutes = Math.max(1, Math.round((end - new Date(t.timer.start)) / 60000));
+    t.timeLogs.push({ id: Store.id(), userId: t.timer.userId, start: t.timer.start, end: end.toISOString(), minutes, note: '' });
+    t.timer = null;
+  }
+
+  logTime(id, { minutes, note }) {
+    const me = this.me();
+    const t = this.store.task(id);
+    if (!t || !this.canWork(me, t)) throw new PermissionError('Not allowed');
+    const m = Math.round(Number(minutes));
+    if (!m || m <= 0) throw new Error('Enter minutes greater than zero');
+    const end = new Date();
+    t.timeLogs.push({ id: Store.id(), userId: me.id, start: new Date(end - m * 60000).toISOString(), end: end.toISOString(), minutes: m, note: note || '' });
+    this.commit();
+    return t;
+  }
 }
 
 function clamp(n) {
