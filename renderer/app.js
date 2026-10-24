@@ -453,3 +453,107 @@ function userStats(uid) {
     avgProgress: active.length ? Math.round(active.reduce((s, t) => s + t.progress, 0) / active.length) : (mine.length ? 100 : 0),
   };
 }
+
+// ============================================================ dashboard
+function pageDashboard() {
+  const st = userStats(me().id);
+  const mine = S.data.tasks.filter((t) => t.assigneeId === me().id);
+  const active = sortTasks(mine.filter((t) => t.status !== 'done'));
+  const dueSoon = active.filter((t) => t.deadline && Date.parse(t.deadline) - Date.now() < 3 * DAY);
+  const suggestions = active.filter((t) => t.progress >= 100);
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const due24 = active.filter((t) => t.deadline && Date.parse(t.deadline) - Date.now() < DAY && !isOverdue(t)).length;
+
+  const upcoming = sortTasks(S.data.tasks.filter((t) => t.status !== 'done' && t.deadline && Date.parse(t.deadline) - Date.now() < 7 * DAY)).slice(0, 8);
+
+  return `
+    <div class="hero">
+      <div class="grow">
+        <h1>${greet}, ${esc(me().name.split(' ')[0])} 👋</h1>
+        <p>You have <b>${st.active}</b> active task${st.active === 1 ? '' : 's'}${due24 ? `, <b>${due24}</b> due in the next 24 hours` : ''}${st.overdue ? ` and <b style="color:#ff8a8a">${st.overdue} overdue</b>` : ''}.</p>
+      </div>
+      <button class="btn primary" data-action="new-task">+ New task</button>
+    </div>
+
+    <div class="grid cols-4">
+      ${statTile('Active tasks', st.active, `${st.overdue} overdue`, '☰')}
+      ${statTile('Due this week', active.filter((t) => t.deadline && Date.parse(t.deadline) - Date.now() < 7 * DAY).length, 'including overdue', '📅')}
+      ${statTile('Completed this week', st.doneThisWeek, `${st.done} completed all-time`, '✓')}
+      ${statTile('Time this week', fmtDur(st.weekMin), `${fmtDur(st.totalMin)} all-time`, '⏱')}
+    </div>
+
+    ${isManager() ? managerOverview() : ''}
+
+    <div class="grid main-side mt">
+      <div class="stack">
+        ${dueSoon.length || suggestions.length ? `
+        <div class="card">
+          <div class="card-head"><h3>⚠ Needs attention</h3><span class="sub">Overdue, due within 3 days, or ready to close</span></div>
+          <div class="task-list">${[...new Set([...suggestions, ...dueSoon])].slice(0, 6).map((t) => taskCard(t)).join('')}</div>
+        </div>` : ''}
+        <div class="card">
+          <div class="card-head"><h3>My active work</h3><button class="btn sm ghost" data-action="nav" data-page="tasks">View all →</button></div>
+          <div class="compact-list">${active.length ? active.slice(0, 10).map(compactRow).join('') : empty('🎉', 'Nothing on your plate. Enjoy!')}</div>
+        </div>
+      </div>
+      <div class="stack">
+        <div class="card">
+          <div class="card-head"><h3>Upcoming deadlines</h3><span class="sub">next 7 days</span></div>
+          ${upcoming.length ? upcoming.map((t) => `
+            <div class="feed-item" data-action="open-task" data-id="${t.id}" style="cursor:pointer">
+              ${avatar(user(t.assigneeId), 'sm')}<div style="min-width:0"><div style="color:var(--text)">${esc(t.title)}</div><div class="small muted">${esc(user(t.assigneeId)?.name || '')} · ${t.progress}%</div></div>
+              <span class="when">${deadlineChip(t)}</span>
+            </div>`).join('') : empty('🗓', 'No deadlines this week')}
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>Recent activity</h3></div>
+          ${S.data.activity.length ? S.data.activity.slice(0, 12).map((a) => `
+            <div class="feed-item" ${a.taskId && task(a.taskId) ? `data-action="open-task" data-id="${a.taskId}" style="cursor:pointer"` : ''}>
+              ${avatar(user(a.userId), 'sm')}<div>${esc(a.text)}</div><span class="when">${relTime(a.at)}</span>
+            </div>`).join('') : empty('·', 'No activity yet')}
+        </div>
+      </div>
+    </div>`;
+}
+
+function statTile(label, value, foot, ico) {
+  return `<div class="card stat"><div class="label">${ico} ${esc(label)}</div><div class="value">${esc(value)}</div><div class="foot">${esc(foot)}</div></div>`;
+}
+
+function managerOverview() {
+  const teams = teamsIHead();
+  if (!teams.length) {
+    return me().role === 'chair' ? `<div class="card mt">${empty('⚇', 'Create your first team and appoint a head to get started.', '<button class="btn primary" data-action="new-team">+ New team</button>')}</div>` : '';
+  }
+  const members = S.data.users.filter((u) => S.data.managedUserIds.includes(u.id) && u.id !== me().id);
+  const week = startOfWeek();
+  const hours = members.map((u) => ({ u, min: S.data.tasks.reduce((s, t) => s + minutesOn(t, { userId: u.id, since: week }), 0) }))
+    .sort((a, b) => b.min - a.min).slice(0, 8);
+  const maxMin = Math.max(1, ...hours.map((h) => h.min));
+  return `
+    <div class="grid cols-2 mt">
+      <div class="card">
+        <div class="card-head"><h3>${me().role === 'chair' ? 'Teams overview' : 'My team'}</h3><button class="btn sm ghost" data-action="nav" data-page="team">Details →</button></div>
+        ${teams.map((tm) => {
+          const tt = S.data.tasks.filter((t) => t.teamId === tm.id);
+          const done = tt.filter((t) => t.status === 'done').length;
+          const pct = tt.length ? Math.round((done / tt.length) * 100) : 0;
+          const od = tt.filter(isOverdue).length;
+          return `<div style="padding:9px 0">
+            <div class="flex small" style="margin-bottom:6px"><span class="team-dot" style="background:${tm.color}"></span><b>${esc(tm.name)}</b>
+              <span class="muted">· ${esc(user(tm.headId)?.name || 'no head')}</span><span class="grow"></span>
+              ${od ? `<span class="chip critical">⚠ ${od} overdue</span>` : ''}<span class="muted">${done}/${tt.length} done</span></div>
+            <div class="progress-wrap" data-tip="${esc(tm.name)}: ${pct}% of tasks done"><div class="progress"><div class="bar" style="width:${pct}%"></div></div><span class="pct">${pct}%</span></div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div class="card">
+        <div class="card-head"><h3>Hours logged this week</h3><span class="sub">by person</span></div>
+        ${hours.length ? hours.map(({ u, min }) => `
+          <div class="hbar-row" data-action="open-member" data-id="${u.id}" style="cursor:pointer" data-tip="${esc(u.name)}: ${fmtDur(min)}">
+            ${person(u)}<div class="track"><div class="fill" style="width:${(min / maxMin) * 100}%"></div></div><span class="v">${fmtDur(min)}</span>
+          </div>`).join('') : empty('⏱', 'No team members yet')}
+      </div>
+    </div>`;
+}
