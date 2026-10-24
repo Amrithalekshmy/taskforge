@@ -904,3 +904,15 @@ function pageSettings() {
       </form>` : `<div class="card"><div class="card-head"><h3>Reminders</h3></div><p class="muted">You'll get a desktop notification ${s.reminderLeadHours}h before each deadline, when something is overdue, and for any custom reminders on your tasks.</p></div>`}
     </div>`;
 }
+
+// ============================================================ notifications
+function renderNotifPanel() {
+  const list = S.data.notifications;
+  return `<div class="notif-panel">
+    <div class="head"><b>Notifications</b><button class="btn sm ghost" data-action="notifs-read">Mark all read</button></div>
+    ${list.length ? list.slice(0, 60).map((n) => `
+      <div class="notif ${n.read ? '' : 'unread'}" data-action="notif-open" data-id="${n.id}" data-task="${n.taskId || ''}">
+        <div><div>${esc(n.text)}</div><div class="when">${relTime(n.at)}</div></div>
+      </div>`).join('') : empty('🔕', 'You are all caught up')}
+  </div>`;
+}
