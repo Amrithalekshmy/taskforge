@@ -173,6 +173,98 @@ class Service {
       },
     };
   }
+
+  // ---------- users & teams ----------
+  createUser(data) {
+    const me = this.me();
+    if (me.role === 'member') throw new PermissionError('Only heads and the chairperson can add people');
+    let { role, teamId } = data;
+    if (me.role === 'head') {
+      role = 'member';
+      if (!this.isHeadOf(me, teamId)) throw new PermissionError('Heads can only add people to their own team');
+    }
+    const u = this._newUser({ ...data, role, teamId: teamId || null });
+    this.store.log(me.id, `${me.name} added ${u.name} as ${role}`);
+    this.notify(u.id, `Welcome to ${this.store.data.orgName}! ${me.name} created your account.`);
+    this.commit();
+    return this.publicUser(u);
+  }
+
+  updateUser(id, patch) {
+    const me = this.me();
+    const u = this.store.user(id);
+    if (!u) throw new Error('User not found');
+    const self = me.id === id;
+    if (!self && me.role !== 'chair' && !(me.role === 'head' && this.managedUserIds(me).has(id))) {
+      throw new PermissionError('Not allowed');
+    }
+    for (const k of ['name', 'email', 'title']) if (k in patch) u[k] = String(patch[k] || '').trim();
+    if (me.role === 'chair' && !self) {
+      if ('role' in patch && ROLES.includes(patch.role)) u.role = patch.role;
+      if ('teamId' in patch) u.teamId = patch.teamId || null;
+    }
+    if (me.role === 'chair' && 'password' in patch && patch.password) {
+      Object.assign(u, (({ salt, hash }) => ({ salt, passwordHash: hash }))(hashPassword(patch.password)));
+    }
+    this.commit();
+    return this.publicUser(u);
+  }
+
+  deleteUser(id) {
+    const me = this.me();
+    if (me.role !== 'chair' || me.id === id) throw new PermissionError('Only the chairperson can remove other people');
+    const u = this.store.user(id);
+    this.store.data.users = this.store.users.filter((x) => x.id !== id);
+    for (const t of this.store.teams) if (t.headId === id) t.headId = null;
+    for (const t of this.store.tasks) if (t.assigneeId === id) t.assigneeId = null;
+    this.store.log(me.id, `${me.name} removed ${u?.name}`);
+    this.commit();
+  }
+
+  createTeam({ name, headId, description }) {
+    const me = this.me();
+    if (me.role !== 'chair') throw new PermissionError('Only the chairperson can create teams');
+    if (!name?.trim()) throw new Error('Team name is required');
+    const team = {
+      id: Store.id(), name: name.trim(), description: description?.trim() || '', headId: headId || null,
+      color: TEAM_COLORS[this.store.teams.length % TEAM_COLORS.length], createdAt: new Date().toISOString(),
+    };
+    this.store.teams.push(team);
+    this._promoteHead(headId, team.id);
+    this.store.log(me.id, `${me.name} created team ${team.name}`);
+    this.commit();
+    return team;
+  }
+
+  updateTeam(id, patch) {
+    const me = this.me();
+    if (me.role !== 'chair') throw new PermissionError('Only the chairperson can edit teams');
+    const t = this.store.team(id);
+    if (!t) throw new Error('Team not found');
+    for (const k of ['name', 'description']) if (k in patch) t[k] = String(patch[k] || '').trim();
+    if ('headId' in patch && patch.headId !== t.headId) {
+      t.headId = patch.headId || null;
+      this._promoteHead(t.headId, t.id);
+    }
+    this.commit();
+    return t;
+  }
+
+  _promoteHead(userId, teamId) {
+    const u = this.store.user(userId);
+    if (!u) return;
+    if (u.role === 'member') u.role = 'head';
+    if (!u.teamId) u.teamId = teamId;
+    this.notify(u.id, `You are now the head of ${this.store.team(teamId).name}`);
+  }
+
+  deleteTeam(id) {
+    const me = this.me();
+    if (me.role !== 'chair') throw new PermissionError('Only the chairperson can delete teams');
+    this.store.data.teams = this.store.teams.filter((t) => t.id !== id);
+    for (const u of this.store.users) if (u.teamId === id) u.teamId = null;
+    this.commit();
+  }
 }
 
 function clamp(n) {
