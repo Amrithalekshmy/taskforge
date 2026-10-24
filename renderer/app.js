@@ -695,3 +695,48 @@ function pageTeam() {
     ${unassigned.length ? `<div class="card team-card"><div class="team-head"><span class="team-dot" style="background:#55554f"></span><div class="grow"><h3>Not in a team</h3></div></div>${memberRows(unassigned)}</div>` : ''}
   </div>`;
 }
+
+// ============================================================ org page (chair)
+function pageOrg() {
+  const tasks = S.data.tasks;
+  const done = tasks.filter((t) => t.status === 'done').length;
+  const week = startOfWeek();
+  const weekMin = tasks.reduce((s, t) => s + minutesOn(t, { since: week }), 0);
+  return `
+    <div class="grid cols-4">
+      ${statTile('People', S.data.users.length, `${S.data.users.filter((u) => u.role === 'head').length} heads`, '👥')}
+      ${statTile('Teams', S.data.teams.length, '', '⚇')}
+      ${statTile('Completion', tasks.length ? `${Math.round((done / tasks.length) * 100)}%` : '—', `${done}/${tasks.length} tasks done`, '✓')}
+      ${statTile('Hours this week', fmtDur(weekMin), `${tasks.filter(isOverdue).length} tasks overdue`, '⏱')}
+    </div>
+    <div class="card mt">
+      <div class="card-head"><h3>Teams</h3><button class="btn sm primary" data-action="new-team">+ New team</button></div>
+      ${S.data.teams.length ? `<div class="grid cols-2">${S.data.teams.map((tm) => {
+        const tt = tasks.filter((t) => t.teamId === tm.id);
+        const d = tt.filter((t) => t.status === 'done').length;
+        const pct = tt.length ? Math.round((d / tt.length) * 100) : 0;
+        const n = S.data.users.filter((u) => u.teamId === tm.id).length;
+        return `<div class="card" style="background:var(--surface-2)">
+          <div class="flex"><span class="team-dot" style="background:${tm.color}"></span><h3 class="grow">${esc(tm.name)}</h3>
+            <button class="btn sm ghost" data-action="edit-team" data-id="${tm.id}">Edit</button></div>
+          <div class="small muted" style="margin:6px 0 12px">${esc(tm.description || 'No description')}</div>
+          <div class="flex small" style="margin-bottom:10px">${person(user(tm.headId))}<span class="grow"></span><span class="muted">${n} people · ${tt.filter(isOverdue).length} overdue</span></div>
+          <div class="progress-wrap" data-tip="${d}/${tt.length} tasks done"><div class="progress"><div class="bar" style="width:${pct}%"></div></div><span class="pct">${pct}%</span></div>
+        </div>`;
+      }).join('')}</div>` : empty('⚇', 'No teams yet')}
+    </div>
+    <div class="card mt">
+      <div class="card-head"><h3>People</h3><button class="btn sm primary" data-action="new-person">+ Add person</button></div>
+      <table class="people"><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Team</th><th>GitHub</th><th>Active</th><th></th></tr></thead><tbody>
+      ${S.data.users.map((u) => `<tr>
+        <td><a href="#" data-action="open-member" data-id="${u.id}">${person(u)}</a></td>
+        <td class="muted">${esc(u.username)}</td>
+        <td><span class="role-badge role-${u.role}">${ROLE_LABEL[u.role]}</span></td>
+        <td>${team(u.teamId) ? `<span class="flex"><span class="team-dot" style="background:${team(u.teamId).color}"></span>${esc(team(u.teamId).name)}</span>` : '<span class="muted">—</span>'}</td>
+        <td>${u.githubLogin ? `<span class="chip gh">@${esc(u.githubLogin)}${u.githubConnected ? ' ✓' : ''}</span>` : '<span class="muted">—</span>'}</td>
+        <td>${userStats(u.id).active}</td>
+        <td style="text-align:right">${u.id !== me().id ? `<button class="btn sm ghost" data-action="edit-person" data-id="${u.id}">Edit</button>` : ''}</td>
+      </tr>`).join('')}
+      </tbody></table>
+    </div>`;
+}
