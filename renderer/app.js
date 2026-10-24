@@ -1415,3 +1415,220 @@ function showSuggestions(taskId, event, result) {
     }
   };
 }
+
+// ============================================================ actions
+const actions = {
+  nav: (el) => { S.page = el.dataset.page; S.notifOpen = false; render(); },
+  'open-task': (el) => openTask(el.dataset.id),
+  'open-member': (el, e) => {
+    e.preventDefault();
+    if (el.dataset.id === me().id) S.page = 'profile';
+    else { S.page = 'member'; S.memberId = el.dataset.id; }
+    closeDrawer();
+    render();
+  },
+  'close-drawer': closeDrawer,
+  'new-task': (el) => taskForm(null, { assignee: el.dataset.assignee, team: el.dataset.team }),
+  'edit-task': (el) => taskForm(task(el.dataset.id)),
+  'delete-task': async (el) => {
+    const t = task(el.dataset.id);
+    if (await confirmModal('Delete task?', `"${t.title}" and its time logs will be removed.`, 'Delete', true)) {
+      await run(() => api('deleteTask', t.id), 'Task deleted');
+      closeDrawer();
+    }
+  },
+  'toggle-timer': (el) => run(() => api('toggleTimer', el.dataset.id)),
+  'set-status': (el) => run(() => api('updateTask', el.dataset.id, { status: el.dataset.status })),
+  'subtask-del': (el) => {
+    const t = task(el.dataset.id);
+    run(() => api('updateTask', t.id, { subtasks: t.subtasks.filter((s) => s.id !== el.dataset.sub) }));
+  },
+  'reminder-del': (el) => {
+    const t = task(el.dataset.id);
+    run(() => api('updateTask', t.id, { reminders: t.reminders.filter((r) => r.id !== el.dataset.rem) }));
+  },
+  'sync-task': (el) => run(() => api('syncTask', el.dataset.id), 'Synced with GitHub'),
+  'sync-all': async () => {
+    const n = await run(() => api('syncAll'));
+    toast(n ? `Synced ${n} GitHub-linked task${n === 1 ? '' : 's'}` : 'No open GitHub-linked tasks to sync', 'success');
+  },
+  'gh-unlink': (el) => run(() => api('updateTask', el.dataset.id, { github: null, progressMode: 'manual' })),
+  'gh-connect': async () => {
+    const token = $('#gh-token').value.trim();
+    if (!token) return toast('Paste a token first', 'error');
+    await run(() => api('connectGithub', token), 'GitHub connected');
+    delete S.gh[me().id];
+    S.myRepos = null;
+  },
+  'gh-disconnect': async () => {
+    if (await confirmModal('Disconnect GitHub?', 'Your token is removed from this computer. Linked tasks will sync using public access only.', 'Disconnect', true)) {
+      run(() => api('disconnectGithub'), 'GitHub disconnected');
+      S.myRepos = null;
+    }
+  },
+  'gh-refresh': (el) => { loadGithubPanel(el.dataset.id, true); const p = $(`[data-gh-panel="${el.dataset.id}"]`); if (p) p.innerHTML = ghPanelInner(el.dataset.id); },
+  'gh-set-login': (el) => {
+    const login = $('#gh-login').value.trim();
+    if (login) run(() => api('setGithubLogin', el.dataset.id, login), 'GitHub username linked');
+  },
+  'task-scope': (el) => { S.tasks.scope = el.dataset.v; S.tasks.person = ''; render(); },
+  'task-status': (el) => { S.tasks.status = el.dataset.v; render(); },
+  'task-view': (el) => { S.tasks.view = el.dataset.v; render(); },
+  'cal-move': (el) => {
+    const v = Number(el.dataset.v);
+    if (v === 0) S.cal = { y: new Date().getFullYear(), m: new Date().getMonth() };
+    else {
+      const d = new Date(S.cal.y, S.cal.m + v, 1);
+      S.cal = { y: d.getFullYear(), m: d.getMonth() };
+    }
+    render();
+  },
+  'toggle-notifs': () => {
+    S.notifOpen = !S.notifOpen;
+    render();
+  },
+  'notifs-read': () => run(() => api('markNotificationsRead')),
+  'notif-open': (el) => {
+    api('markNotificationsRead', [el.dataset.id]);
+    S.notifOpen = false;
+    if (el.dataset.task && task(el.dataset.task)) openTask(el.dataset.task);
+    render();
+  },
+  'new-person': (el) => personForm(null, el.dataset.team),
+  'edit-person': (el) => personForm(user(el.dataset.id)),
+  'new-team': () => teamForm(),
+  'edit-team': (el) => teamForm(team(el.dataset.id)),
+  'event-flow': (el) => eventFlow(el.dataset.id, { askFirst: false }),
+  'clear-ai-key': () => run(() => api('updateSettings', { anthropicKey: '' }), 'API key removed'),
+  logout: async () => {
+    await api('logout');
+    S.page = 'dashboard';
+    S.gh = {};
+    S.myRepos = null;
+    closeDrawer();
+    refresh();
+  },
+};
+
+const changes = {
+  'task-person': (el) => { S.tasks.person = el.value; render(); },
+  'progress-mode': (el) => run(() => api('updateTask', el.dataset.id, { progressMode: el.value })),
+  progress: (el) => run(() => api('updateTask', el.dataset.id, { progress: Number(el.value) })),
+  subtask: (el) => {
+    const t = task(el.dataset.id);
+    run(() => api('updateTask', t.id, { subtasks: t.subtasks.map((s) => (s.id === el.dataset.sub ? { ...s, done: el.checked } : s)) }));
+  },
+};
+
+const forms = {
+  'subtask-add': (form, t) => {
+    const text = form.text.value.trim();
+    if (!text) return;
+    const patch = { subtasks: [...t.subtasks, { text, done: false }] };
+    if (!t.subtasks.length && t.progressMode === 'manual' && t.progress === 0) patch.progressMode = 'checklist';
+    return api('updateTask', t.id, patch);
+  },
+  'log-time': (form, t) => api('logTime', t.id, { minutes: form.minutes.value, note: form.note.value }).then(() => toast('Time logged', 'success')),
+  'gh-link': (form, t) => api('updateTask', t.id, { github: { repo: form.repo.value, type: form.type.value, number: form.number.value }, progressMode: 'github' }).then(() => toast('Linked – syncing with GitHub…', 'success')),
+  'reminder-add': (form, t) => api('updateTask', t.id, { reminders: [...t.reminders, { at: fromLocalInput(form.at.value), text: form.text.value }] }).then(() => toast('Reminder added', 'success')),
+  comment: (form, t) => form.text.value.trim() && api('addComment', t.id, form.text.value),
+};
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-action]');
+  if (S.notifOpen && !e.target.closest('.notif-panel') && !e.target.closest('[data-action=toggle-notifs]')) {
+    S.notifOpen = false;
+    $('.notif-panel')?.remove();
+  }
+  if (!el || el.disabled) return;
+  if (el.tagName === 'A' && !el.target) e.preventDefault();
+  const fn = actions[el.dataset.action];
+  if (fn) fn(el, e);
+});
+
+document.addEventListener('change', (e) => {
+  const el = e.target.closest('[data-change]');
+  if (el && changes[el.dataset.change]) changes[el.dataset.change](el);
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'task-search') {
+    S.tasks.q = e.target.value;
+    S.tasks._focusSearch = true;
+    render();
+  }
+});
+
+document.addEventListener('submit', async (e) => {
+  const form = e.target;
+  if (form.dataset.form) {
+    e.preventDefault();
+    const t = task(form.dataset.id);
+    try {
+      await forms[form.dataset.form](form, t);
+      form.reset();
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+    return;
+  }
+  if (form.id === 'profile-form') {
+    e.preventDefault();
+    run(() => api('updateUser', me().id, Object.fromEntries(new FormData(form))), 'Profile saved');
+  }
+  if (form.id === 'password-form') {
+    e.preventDefault();
+    await run(() => api('changePassword', Object.fromEntries(new FormData(form))), 'Password changed');
+    form.reset();
+  }
+  if (form.id === 'settings-form') {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const patch = {
+      orgName: fd.get('orgName'),
+      reminderLeadHours: fd.get('reminderLeadHours'),
+      githubSyncMinutes: fd.get('githubSyncMinutes'),
+      keepRunningInTray: fd.get('keepRunningInTray') === 'on',
+    };
+    if (fd.get('anthropicKey')) patch.anthropicKey = fd.get('anthropicKey');
+    run(() => api('updateSettings', patch), 'Settings saved');
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if ($('#modal-root').innerHTML) closeModal();
+    else if (S.drawerTaskId) closeDrawer();
+    else if (S.notifOpen) { S.notifOpen = false; render(); }
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n' && S.data && !$('#modal-root').innerHTML) {
+    e.preventDefault();
+    taskForm();
+  }
+});
+
+// Tooltips for any element with data-tip.
+document.addEventListener('mouseover', (e) => {
+  const el = e.target.closest('[data-tip]');
+  const tip = $('#tooltip');
+  if (!el || !el.dataset.tip) return tip.classList.remove('show');
+  tip.textContent = el.dataset.tip;
+  tip.classList.add('show');
+});
+document.addEventListener('mousemove', (e) => {
+  const tip = $('#tooltip');
+  if (!tip.classList.contains('show')) return;
+  const x = Math.min(e.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
+  const y = e.clientY + 18 + tip.offsetHeight > window.innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 18;
+  tip.style.left = `${x}px`;
+  tip.style.top = `${y}px`;
+});
+
+// Live clocks for running timers.
+setInterval(() => {
+  for (const el of $$('[data-clock]')) el.textContent = fmtClock(Date.now() - Date.parse(el.dataset.clock));
+  for (const el of $$('[data-total-start]')) el.textContent = fmtClock(Number(el.dataset.totalBase) + (Date.now() - Number(el.dataset.totalStart)));
+}, 1000);
+
+// Re-render once a minute so relative times / deadline chips stay fresh.
+setInterval(() => { if (S.data && !$('#modal-root').innerHTML) render(); }, 60000);
