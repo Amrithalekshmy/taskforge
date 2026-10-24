@@ -146,6 +146,33 @@ class Service {
     this.store.users.push(u);
     return u;
   }
+
+  // ---------- bootstrap (everything the UI needs) ----------
+  bootstrap() {
+    const me = this.me();
+    const managed = this.managedUserIds(me);
+    const myTeam = me.teamId;
+    const visibleUsers = this.store.users.filter((u) =>
+      managed.has(u.id) || u.role === 'chair' || (myTeam && u.teamId === myTeam) ||
+      (myTeam && this.store.team(myTeam)?.headId === u.id));
+    const s = this.store.settings;
+    return {
+      orgName: this.store.data.orgName,
+      me: this.publicUser(me),
+      users: visibleUsers.map((u) => this.publicUser(u)),
+      managedUserIds: [...managed],
+      teams: this.store.teams,
+      tasks: this.store.tasks.filter((t) => this.canView(me, t)),
+      notifications: this.store.notifications.filter((n) => n.userId === me.id).slice(0, 200),
+      activity: this.store.data.activity.filter((a) => managed.has(a.userId) || a.userId === me.id).slice(0, 60),
+      settings: {
+        githubSyncMinutes: s.githubSyncMinutes,
+        reminderLeadHours: s.reminderLeadHours,
+        keepRunningInTray: s.keepRunningInTray,
+        aiConfigured: !!decryptSecret(s.anthropicKey) || !!process.env.ANTHROPIC_API_KEY,
+      },
+    };
+  }
 }
 
 function clamp(n) {
