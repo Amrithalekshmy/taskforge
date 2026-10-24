@@ -199,3 +199,48 @@ async function refresh() {
     if (!typing) renderDrawer();
   }
 }
+
+// ============================================================ auth
+function renderAuth(needsSetup) {
+  $('#drawer-root').innerHTML = '';
+  $('#modal-root').innerHTML = '';
+  const brand = `<div class="brand"><div class="brand-logo">✓</div>TaskForge</div>`;
+  $('#app').innerHTML = needsSetup ? `
+    <div class="auth-wrap"><form class="auth-card" id="setup-form">
+      ${brand}
+      <h1>Set up your workspace</h1>
+      <p class="sub">You'll be the <b>Chairperson</b> – you can create teams, appoint heads, add members and see everyone's work.</p>
+      <div class="field"><label>Organisation / club name</label><input type="text" name="orgName" placeholder="e.g. ACM Student Chapter" required></div>
+      <div class="row">
+        <div class="field"><label>Your name</label><input type="text" name="name" required></div>
+        <div class="field"><label>Username</label><input type="text" name="username" required></div>
+      </div>
+      <div class="field"><label>Email</label><input type="email" name="email"></div>
+      <div class="field"><label>Password</label><input type="password" name="password" minlength="6" required></div>
+      <div class="error-text" id="auth-err"></div>
+      <button class="btn primary block" type="submit">Create workspace</button>
+    </form></div>` : `
+    <div class="auth-wrap"><form class="auth-card" id="login-form">
+      ${brand}
+      <h1>Welcome back</h1>
+      <p class="sub">Sign in to see your tasks, your team and your progress.</p>
+      <div class="field"><label>Username</label><input type="text" name="username" autofocus required></div>
+      <div class="field"><label>Password</label><input type="password" name="password" required></div>
+      <div class="error-text" id="auth-err"></div>
+      <button class="btn primary block" type="submit">Sign in</button>
+      <p class="sub small" style="margin:16px 0 0">No account? Ask your team head or chairperson to add you.</p>
+    </form></div>`;
+
+  const form = $('#setup-form') || $('#login-form');
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    try {
+      await api(needsSetup ? 'setup' : 'login', data);
+      S.page = 'dashboard';
+      await refresh();
+    } catch (err) {
+      $('#auth-err').textContent = err.message;
+    }
+  };
+}
