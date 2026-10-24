@@ -1,0 +1,19 @@
+{
+  "name": "taskforge",
+  "productName": "TaskForge",
+  "version": "1.0.0",
+  "description": "Team task tracker with role hierarchy (chairperson → heads → members), GitHub sync, time tracking, deadline reminders and AI event follow-ups.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "author": "amrithalekshmy",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "latest"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0"
+  }
+}
