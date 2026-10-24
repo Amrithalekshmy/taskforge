@@ -93,17 +93,89 @@ class Service {
 
   // ---------- auth ----------
   status() {
-    const needsSetup = this.store.users.length === 0;
+    const s = this.store.settings;
     const u = this.store.user(this.store.data.session.userId);
-    return { needsSetup, user: u ? this.publicUser(u) : null };
+    return {
+      needsSetup: !this.store.data.orgName && this.store.users.length === 0,
+      orgName: this.store.data.orgName || null,
+      codes: { chair: !!s.chairCode, head: !!s.headCode },
+      // Shown on the sign-up screen so people can pick (or claim) a team.
+      teams: this.store.teams.map((t) => ({ id: t.id, name: t.name, color: t.color, hasHead: !!t.headId })),
+      user: u ? this.publicUser(u) : null,
+    };
   }
 
-  setup({ name, username, email, password, orgName }) {
-    if (this.store.users.length) throw new PermissionError('Already set up');
-    const u = this._newUser({ name, username, email, password, role: 'chair' });
-    this.store.data.orgName = orgName?.trim() || 'My Organisation';
+  // First launch: name the workspace and choose the secret codes. No account is
+  // created, so whoever installs the app does not automatically become chairperson.
+  setupWorkspace({ orgName, chairCode, headCode }) {
+    if (this.store.data.orgName || this.store.users.length) throw new PermissionError('Workspace is already set up');
+    if (!orgName?.trim()) throw new Error('Organisation name is required');
+    if (String(chairCode).trim() === String(headCode).trim()) throw new Error('Chairperson and Head codes must be different');
+    const chair = this._hashCode(chairCode, 'Chairperson');
+    const head = this._hashCode(headCode, 'Head');
+    Object.assign(this.store.settings, { chairCode: chair, headCode: head });
+    this.store.data.orgName = orgName.trim();
+    this.commit();
+  }
+
+  _hashCode(code, label) {
+    const c = String(code || '').trim();
+    if (c.length < 4) throw new Error(`${label} code must be at least 4 characters`);
+    const { salt, hash } = hashPassword(c);
+    return { salt, hash };
+  }
+
+  _checkCode(role, code) {
+    const stored = this.store.settings[role === 'chair' ? 'chairCode' : 'headCode'];
+    const label = role === 'chair' ? 'Chairperson' : 'Head';
+    if (!stored) throw new PermissionError(`The ${label} code hasn't been set yet – ask the chairperson to set it in Settings.`);
+    // Slow down guessing: 5 wrong codes locks that role's sign-up for a minute.
+    const lock = (this.codeFailures ||= {})[role] || { count: 0, until: 0 };
+    if (lock.until > Date.now()) throw new PermissionError(`Too many wrong codes. Try again in ${Math.ceil((lock.until - Date.now()) / 1000)}s.`);
+    if (!verifyPassword(String(code || '').trim(), stored.salt, stored.hash)) {
+      lock.count += 1;
+      if (lock.count >= 5) Object.assign(lock, { count: 0, until: Date.now() + 60000 });
+      this.codeFailures[role] = lock;
+      throw new PermissionError(`Wrong ${label} code`);
+    }
+    this.codeFailures[role] = { count: 0, until: 0 };
+  }
+
+  signup({ name, username, email, password, confirm, role, code, teamId, newTeamName }) {
+    if (!this.store.data.orgName) throw new PermissionError('Set up the workspace first');
+    if (!ROLES.includes(role)) throw new Error('Pick a role');
+    if (confirm !== undefined && password !== confirm) throw new Error('Passwords do not match');
+    if (role !== 'member') this._checkCode(role, code);
+
+    let team = teamId ? this.store.team(teamId) : null;
+    if (teamId && !team) throw new Error('That team no longer exists');
+    if (role === 'head') {
+      if (newTeamName?.trim()) team = null;
+      else if (!team) throw new Error('Pick the team you lead, or create a new one');
+      else if (team.headId) throw new Error(`${team.name} already has a head`);
+    }
+
+    const u = this._newUser({ name, username, email, password, role, teamId: role === 'chair' ? null : team?.id || null });
+    if (role === 'head') {
+      if (!team) {
+        team = {
+          id: Store.id(), name: newTeamName.trim(), description: '', headId: u.id,
+          color: TEAM_COLORS[this.store.teams.length % TEAM_COLORS.length], createdAt: new Date().toISOString(),
+        };
+        this.store.teams.push(team);
+      }
+      team.headId = u.id;
+      u.teamId = team.id;
+    }
+
+    const roleText = role === 'chair' ? 'Chairperson' : role === 'head' ? `Head of ${team.name}` : `a member${team ? ` of ${team.name}` : ''}`;
+    for (const c of this.store.users.filter((x) => x.role === 'chair' && x.id !== u.id)) {
+      this.notify(c.id, `👋 ${u.name} signed up as ${roleText}`);
+    }
+    if (role === 'member' && team?.headId) this.notify(team.headId, `👋 ${u.name} joined your team ${team.name}`);
+    this.store.log(u.id, `${u.name} signed up as ${roleText}`);
     this.store.data.session.userId = u.id;
-    this.store.log(u.id, `${u.name} set up the workspace as Chairperson`);
+    u.lastLoginAt = new Date().toISOString();
     this.commit();
     return this.publicUser(u);
   }
@@ -170,6 +242,7 @@ class Service {
         reminderLeadHours: s.reminderLeadHours,
         keepRunningInTray: s.keepRunningInTray,
         aiConfigured: !!decryptSecret(s.anthropicKey) || !!process.env.ANTHROPIC_API_KEY,
+        codes: { chair: !!s.chairCode, head: !!s.headCode },
       },
     };
   }
@@ -592,6 +665,18 @@ class Service {
     if ('keepRunningInTray' in patch) s.keepRunningInTray = !!patch.keepRunningInTray;
     if ('anthropicKey' in patch) s.anthropicKey = patch.anthropicKey ? encryptSecret(patch.anthropicKey.trim()) : null;
     if ('orgName' in patch && patch.orgName?.trim()) this.store.data.orgName = patch.orgName.trim();
+    const same = (code, stored) => stored && verifyPassword(String(code).trim(), stored.salt, stored.hash);
+    if ((patch.chairCode && patch.headCode && patch.chairCode.trim() === patch.headCode.trim()) ||
+        (patch.chairCode && !patch.headCode && same(patch.chairCode, s.headCode)) ||
+        (patch.headCode && !patch.chairCode && same(patch.headCode, s.chairCode))) {
+      throw new Error('Chairperson and Head codes must be different');
+    }
+    // Validate both before saving either, so a bad second code doesn't half-apply.
+    const chairCode = patch.chairCode ? this._hashCode(patch.chairCode, 'Chairperson') : null;
+    const headCode = patch.headCode ? this._hashCode(patch.headCode, 'Head') : null;
+    if (chairCode) s.chairCode = chairCode;
+    if (headCode) s.headCode = headCode;
+    if (patch.chairCode || patch.headCode) this.store.log(me.id, `${me.name} changed the role sign-up codes`);
     this.commit();
   }
 

@@ -16,6 +16,8 @@ const EMPTY = {
     reminderLeadHours: 24,
     anthropicKey: null, // encrypted with safeStorage when available
     keepRunningInTray: true,
+    chairCode: null, // { salt, hash } – secret needed to sign up as Chairperson
+    headCode: null, // { salt, hash } – secret needed to sign up as a Head
   },
   session: { userId: null },
 };

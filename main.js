@@ -105,7 +105,7 @@ function createTray() {
 
 // Methods the renderer may call. Everything else on Service is private.
 const API = [
-  'status', 'setup', 'login', 'logout', 'changePassword', 'bootstrap',
+  'status', 'setupWorkspace', 'signup', 'login', 'logout', 'changePassword', 'bootstrap',
   'createUser', 'updateUser', 'deleteUser',
   'createTeam', 'updateTeam', 'deleteTeam',
   'createTask', 'updateTask', 'deleteTask', 'addComment', 'toggleTimer', 'logTime',
