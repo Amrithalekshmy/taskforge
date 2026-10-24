@@ -454,6 +454,83 @@ class Service {
     this.commit();
     return t;
   }
+
+  // ---------- GitHub ----------
+  async connectGithub(token) {
+    const me = this.me();
+    const v = await github.viewer(token.trim());
+    me.githubToken = encryptSecret(token.trim());
+    me.githubLogin = v.login;
+    me.githubAvatar = v.avatar_url;
+    this.profileCache.delete(v.login);
+    this.store.log(me.id, `${me.name} connected GitHub @${v.login}`);
+    this.commit();
+    return this.publicUser(me);
+  }
+
+  disconnectGithub() {
+    const me = this.me();
+    me.githubToken = null;
+    this.commit();
+  }
+
+  setGithubLogin(userId, login) {
+    // Lets heads/chair attach a public GitHub username to someone without a token.
+    const me = this.me();
+    if (userId !== me.id && !this.managedUserIds(me).has(userId)) throw new PermissionError('Not allowed');
+    const u = this.store.user(userId);
+    u.githubLogin = String(login || '').trim().replace(/^@/, '') || null;
+    this.commit();
+  }
+
+  async githubProfile(userId, force = false) {
+    const me = this.me();
+    const u = this.store.user(userId);
+    if (!u?.githubLogin) return null;
+    const cached = this.profileCache.get(u.githubLogin);
+    if (!force && cached && Date.now() - Date.parse(cached.fetchedAt) < 10 * 60000) return cached;
+    const bundle = await github.profileBundle(u.githubLogin, this.githubTokenFor(u.id, me.id));
+    this.profileCache.set(u.githubLogin, bundle);
+    return bundle;
+  }
+
+  async githubRepoItems(repo) {
+    const me = this.me();
+    return github.repoItems(repo, this.githubTokenFor(me.id));
+  }
+
+  async githubMyRepos() {
+    const me = this.me();
+    const token = this.githubTokenFor(me.id);
+    return token && me.githubToken ? github.myRepos(token) : [];
+  }
+
+  async syncTask(id) {
+    const t = this.store.task(id);
+    if (!t?.github) return t;
+    try {
+      const r = await github.syncLink(t.github, this.githubTokenFor(t.assigneeId, t.assignedById));
+      const wasState = t.github.state;
+      Object.assign(t.github, { state: r.state, info: r.info, lastSync: new Date().toISOString(), error: null });
+      if (t.status !== 'done') {
+        if (t.progressMode === 'github' && r.progress !== null) t.progress = r.progress;
+        if (r.done) this._complete(t, null, 'github');
+        else if (t.progress > 0 && t.status === 'todo') t.status = 'in_progress';
+        else if (r.state === 'open' && wasState === 'draft' && t.status === 'in_progress') t.status = 'review';
+      }
+    } catch (err) {
+      t.github.error = err.message;
+      t.github.lastSync = new Date().toISOString();
+    }
+    this.commit();
+    return t;
+  }
+
+  async syncAll() {
+    const pending = this.store.tasks.filter((t) => t.github && t.status !== 'done');
+    for (const t of pending) await this.syncTask(t.id);
+    return pending.length;
+  }
 }
 
 function clamp(n) {
