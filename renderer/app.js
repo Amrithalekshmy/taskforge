@@ -169,7 +169,7 @@ const S = {
   drawerTaskId: null,
   notifOpen: false,
   tasks: { scope: 'mine', status: 'active', view: 'list', person: '', q: '' },
-  cal: { y: new Date().getFullYear(), m: new Date().getMonth() },
+  cal: { y: new Date().getFullYear(), m: new Date().getMonth(), view: 'month', team: '', person: '', mine: false },
   gh: {}, // userId -> { loading, data, error }
   myRepos: null,
 };
@@ -188,8 +188,12 @@ const teamsIHead = () => S.data.teams.filter((t) => me().role === 'chair' || t.h
 async function refresh() {
   const st = await api('status');
   if (!st.user) {
+    // Background saves (e.g. reminders) must not wipe what someone is typing on the login screen.
+    const shown = S.data === null && $('.auth-card') && S.authNeedsSetup === st.needsSetup;
     S.data = null;
-    return renderAuth(st.needsSetup);
+    S.authStatus = st;
+    if (!shown) renderAuth(st);
+    return;
   }
   S.data = await api('bootstrap');
   render();
@@ -201,42 +205,143 @@ async function refresh() {
 }
 
 // ============================================================ auth
-function renderAuth(needsSetup) {
+const ROLE_INFO = {
+  member: ['🙋', 'Member', 'Work on tasks from your head'],
+  head: ['🧭', 'Head', 'Lead a team · needs Head code'],
+  chair: ['👑', 'Chairperson', 'See everything · needs Chair code'],
+};
+
+function renderAuth(st, tab = S.authTab || 'login') {
+  S.authTab = tab;
+  S.authNeedsSetup = st.needsSetup;
   $('#drawer-root').innerHTML = '';
   $('#modal-root').innerHTML = '';
-  const brand = `<div class="brand"><div class="brand-logo">✓</div>TaskForge</div>`;
-  $('#app').innerHTML = needsSetup ? `
-    <div class="auth-wrap"><form class="auth-card" id="setup-form">
-      ${brand}
-      <h1>Set up your workspace</h1>
-      <p class="sub">You'll be the <b>Chairperson</b> – you can create teams, appoint heads, add members and see everyone's work.</p>
-      <div class="field"><label>Organisation / club name</label><input type="text" name="orgName" placeholder="e.g. ACM Student Chapter" required></div>
-      <div class="row">
-        <div class="field"><label>Your name</label><input type="text" name="name" required></div>
-        <div class="field"><label>Username</label><input type="text" name="username" required></div>
-      </div>
-      <div class="field"><label>Email</label><input type="email" name="email"></div>
-      <div class="field"><label>Password</label><input type="password" name="password" minlength="6" required></div>
-      <div class="error-text" id="auth-err"></div>
-      <button class="btn primary block" type="submit">Create workspace</button>
-    </form></div>` : `
+  const brand = `<div class="brand"><div class="brand-logo">✓</div><div>TaskForge${st.orgName ? `<div class="org">${esc(st.orgName)}</div>` : ''}</div></div>`;
+
+  if (st.needsSetup) {
+    $('#app').innerHTML = `
+      <div class="auth-wrap"><form class="auth-card wide" id="setup-form">
+        ${brand}
+        <h1>Set up your workspace</h1>
+        <p class="sub">Name your organisation and choose two secret codes. <b>No account is created here</b> – everyone, including the chairperson, signs up afterwards.</p>
+        <div class="field"><label>Organisation / club name</label><input type="text" name="orgName" placeholder="e.g. ACM Student Chapter" required></div>
+        <div class="row">
+          <div class="field"><label>👑 Chairperson code</label><input type="password" name="chairCode" minlength="4" required></div>
+          <div class="field"><label>Confirm</label><input type="password" name="chairCode2" minlength="4" required></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>🧭 Head code</label><input type="password" name="headCode" minlength="4" required></div>
+          <div class="field"><label>Confirm</label><input type="password" name="headCode2" minlength="4" required></div>
+        </div>
+        <p class="sub small">Give the Chairperson code only to your chairperson and the Head code only to team heads. Without the right code, nobody can sign up as them. The chairperson can change both codes later in Settings.</p>
+        <div class="error-text" id="auth-err"></div>
+        <button class="btn primary block" type="submit">Create workspace</button>
+      </form></div>`;
+    const form = $('#setup-form');
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const d = Object.fromEntries(new FormData(form));
+      if (d.chairCode !== d.chairCode2) return ($('#auth-err').textContent = 'Chairperson codes do not match');
+      if (d.headCode !== d.headCode2) return ($('#auth-err').textContent = 'Head codes do not match');
+      try {
+        await api('setupWorkspace', { orgName: d.orgName, chairCode: d.chairCode, headCode: d.headCode });
+        S.authTab = 'signup';
+        renderAuth(await api('status'));
+      } catch (err) {
+        $('#auth-err').textContent = err.message;
+      }
+    };
+    return;
+  }
+
+  const tabs = `<div class="seg auth-tabs">
+      <button type="button" class="${tab === 'login' ? 'on' : ''}" data-auth-tab="login">Log in</button>
+      <button type="button" class="${tab === 'signup' ? 'on' : ''}" data-auth-tab="signup">Sign up</button>
+    </div>`;
+
+  const freeTeams = st.teams.filter((t) => !t.hasHead);
+  $('#app').innerHTML = tab === 'login' ? `
     <div class="auth-wrap"><form class="auth-card" id="login-form">
-      ${brand}
+      ${brand}${tabs}
       <h1>Welcome back</h1>
-      <p class="sub">Sign in to see your tasks, your team and your progress.</p>
+      <p class="sub">Log in to see your tasks, your team and your progress.</p>
       <div class="field"><label>Username</label><input type="text" name="username" autofocus required></div>
       <div class="field"><label>Password</label><input type="password" name="password" required></div>
       <div class="error-text" id="auth-err"></div>
-      <button class="btn primary block" type="submit">Sign in</button>
-      <p class="sub small" style="margin:16px 0 0">No account? Ask your team head or chairperson to add you.</p>
+      <button class="btn primary block" type="submit">Log in</button>
+      <p class="sub small" style="margin:16px 0 0">New here? <a href="#" data-auth-tab="signup">Create an account</a></p>
+    </form></div>` : `
+    <div class="auth-wrap"><form class="auth-card wide" id="signup-form">
+      ${brand}${tabs}
+      <h1>Create your account</h1>
+      <p class="sub">Your personal account tracks your tasks, time and GitHub progress.</p>
+      <div class="field"><label>I am joining as</label>
+        <div class="role-pick">${Object.entries(ROLE_INFO).map(([r, [ico, label, hint]]) => {
+          const locked = r !== 'member' && !st.codes[r];
+          return `<label class="role-opt ${locked ? 'locked' : ''}" ${locked ? 'data-tip="The chairperson has not set this code yet"' : ''}>
+            <input type="radio" name="role" value="${r}" ${r === 'member' ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+            <span class="ico">${ico}</span><b>${label}</b><small>${locked ? 'Code not set yet' : hint}</small></label>`;
+        }).join('')}</div>
+      </div>
+      <div class="field hidden" id="code-field"><label id="code-label">Secret code</label>
+        <input type="password" name="code" autocomplete="off" placeholder="Ask your chairperson for this code">
+        <span class="hint">This stops anyone from signing up as a head or chairperson without permission.</span></div>
+      <div class="field" id="team-field"><label>Team</label>
+        <select name="teamId" id="team-select"></select>
+        <input type="text" name="newTeamName" id="new-team" class="hidden" placeholder="New team name, e.g. Web Development" style="margin-top:8px">
+      </div>
+      <div class="row">
+        <div class="field"><label>Full name</label><input type="text" name="name" required></div>
+        <div class="field"><label>Username</label><input type="text" name="username" required></div>
+      </div>
+      <div class="field"><label>Email</label><input type="email" name="email"></div>
+      <div class="row">
+        <div class="field"><label>Password</label><input type="password" name="password" minlength="6" required></div>
+        <div class="field"><label>Confirm password</label><input type="password" name="confirm" minlength="6" required></div>
+      </div>
+      <div class="error-text" id="auth-err"></div>
+      <button class="btn primary block" type="submit">Create account</button>
+      <p class="sub small" style="margin:16px 0 0">Already have an account? <a href="#" data-auth-tab="login">Log in</a></p>
     </form></div>`;
 
-  const form = $('#setup-form') || $('#login-form');
+  for (const el of $$('[data-auth-tab]')) {
+    el.onclick = (e) => { e.preventDefault(); renderAuth(st, el.dataset.authTab); };
+  }
+
+  const form = $('#login-form') || $('#signup-form');
+  if (tab === 'signup') {
+    const sync = () => {
+      const role = form.role.value;
+      $('#code-field').classList.toggle('hidden', role === 'member');
+      form.code.required = role !== 'member';
+      $('#code-label').textContent = role === 'chair' ? '👑 Chairperson code' : '🧭 Head code';
+      $('#team-field').classList.toggle('hidden', role === 'chair');
+      const sel = $('#team-select');
+      const prev = sel.value;
+      sel.innerHTML = role === 'head'
+        ? `${freeTeams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}<option value="__new">+ Create a new team…</option>`
+        : `<option value="">No team yet</option>${st.teams.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join('')}`;
+      if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+      const creating = role === 'head' && sel.value === '__new';
+      $('#new-team').classList.toggle('hidden', !creating);
+      form.newTeamName.required = creating;
+    };
+    form.addEventListener('change', (e) => { if (e.target.name === 'role' || e.target.name === 'teamId') sync(); });
+    sync();
+  }
+
   form.onsubmit = async (e) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(form));
     try {
-      await api(needsSetup ? 'setup' : 'login', data);
+      if (tab === 'login') {
+        await api('login', data);
+      } else {
+        if (data.password !== data.confirm) throw new Error('Passwords do not match');
+        if (data.role !== 'head' || data.teamId !== '__new') delete data.newTeamName;
+        if (data.teamId === '__new') data.teamId = '';
+        await api('signup', data);
+      }
       S.page = 'dashboard';
       await refresh();
     } catch (err) {
@@ -480,6 +585,10 @@ function pageDashboard() {
       ${statTile('Active tasks', st.active, `${st.overdue} overdue`, '☰')}
       ${statTile('Due this week', active.filter((t) => t.deadline && Date.parse(t.deadline) - Date.now() < 7 * DAY).length, 'including overdue', '📅')}
       ${statTile('Completed this week', st.doneThisWeek, `${st.done} completed all-time`, '✓')}
+    ${me().role === 'chair' && (!codes.chair || !codes.head) ? `
+    <div class="suggest" style="margin-bottom:18px;background:rgba(250,178,25,.08);border-color:rgba(250,178,25,.5);color:var(--warning)">
+      <span>🔐</span><span class="grow">Set the ${!codes.chair && !codes.head ? 'Chairperson and Head codes' : !codes.chair ? 'Chairperson code' : 'Head code'} so people can sign up for those roles. Until then they can only join as members.</span>
+      <button class="btn sm" data-action="nav" data-page="settings">Set codes</button></div>` : ''}
       ${statTile('Time this week', fmtDur(st.weekMin), `${fmtDur(st.totalMin)} all-time`, '⏱')}
     </div>
 
@@ -978,6 +1087,15 @@ function renderDrawer() {
             <span class="k">Assignee</span><span>${person(user(t.assigneeId))}</span>
             <span class="k">Assigned by</span><span>${person(user(t.assignedById))}</span>
             <span class="k">Team</span><span>${team(t.teamId) ? `<span class="flex"><span class="team-dot" style="background:${team(t.teamId).color}"></span>${esc(team(t.teamId).name)}</span>` : '—'}</span>
+        <fieldset class="fieldset"><legend>🔐 Sign-up codes</legend>
+          <p class="small muted" style="margin-top:0;line-height:1.5">People need these codes to sign up as a Head or Chairperson. Codes are stored as one-way hashes, so they can't be shown again – type a new one to change it.</p>
+          <div class="row">
+            <div class="field"><label>👑 Chairperson code ${s.codes.chair ? '<span class="chip good">✓ set</span>' : '<span class="chip warning">⚠ not set</span>'}</label>
+              <input type="password" name="chairCode" minlength="4" autocomplete="new-password" placeholder="${s.codes.chair ? 'Type to replace' : 'Set a code'}"></div>
+            <div class="field"><label>🧭 Head code ${s.codes.head ? '<span class="chip good">✓ set</span>' : '<span class="chip warning">⚠ not set</span>'}</label>
+              <input type="password" name="headCode" minlength="4" autocomplete="new-password" placeholder="${s.codes.head ? 'Type to replace' : 'Set a code'}"></div>
+          </div>
+        </fieldset>
             <span class="k">Deadline</span><span>${fmtDate(t.deadline)}</span>
             <span class="k">Time</span><span>${fmtDur(total)} logged${t.estimateHours ? ` of ${t.estimateHours}h estimated` : ''}</span>
             ${t.completedAt ? `<span class="k">Completed</span><span>${fmtDate(t.completedAt)}</span>` : ''}
@@ -1646,3 +1764,5 @@ window.taskforge.on('task-completed', ({ taskId, looksLikeEvent }) => {
 });
 
 refresh();
+    if (fd.get('chairCode')) patch.chairCode = fd.get('chairCode');
+    if (fd.get('headCode')) patch.headCode = fd.get('headCode');
