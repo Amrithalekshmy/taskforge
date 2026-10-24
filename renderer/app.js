@@ -1632,3 +1632,17 @@ setInterval(() => {
 
 // Re-render once a minute so relative times / deadline chips stay fresh.
 setInterval(() => { if (S.data && !$('#modal-root').innerHTML) render(); }, 60000);
+
+// ============================================================ main-process events
+window.taskforge.on('data-changed', () => refresh());
+window.taskforge.on('notification', (n) => toast(n.text, '', n.taskId ? { label: 'Open', run: () => openTask(n.taskId) } : null));
+window.taskforge.on('open-task', (id) => { if (S.data && task(id)) openTask(id); });
+window.taskforge.on('task-completed', ({ taskId, looksLikeEvent }) => {
+  setTimeout(() => {
+    if (!S.data || !task(taskId) || $('#modal-root').innerHTML) return;
+    if (looksLikeEvent) eventFlow(taskId);
+    else toast(`🎉 "${task(taskId).title}" completed!`, 'success', { label: 'Was this for an event?', run: () => eventFlow(taskId, { askFirst: false }) });
+  }, 300);
+});
+
+refresh();
