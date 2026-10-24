@@ -740,3 +740,129 @@ function pageOrg() {
       </tbody></table>
     </div>`;
 }
+
+// ============================================================ member / profile page
+function pageMember(uid) {
+  const u = user(uid);
+  if (!u) return empty('?', 'Person not found');
+  const isMe = uid === me().id;
+  const st = userStats(uid);
+  const days = lastNDays(14);
+  const perDay = days.map((d) => {
+    const s = d.getTime();
+    const e = s + DAY;
+    let min = 0;
+    for (const t of S.data.tasks) {
+      for (const l of t.timeLogs) if (l.userId === uid && Date.parse(l.end) >= s && Date.parse(l.end) < e) min += l.minutes;
+      if (t.timer?.userId === uid && e > Date.now() && s <= Date.now()) min += (Date.now() - Math.max(Date.parse(t.timer.start), s)) / 60000;
+    }
+    return { label: d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }), short: d.toLocaleDateString(undefined, { day: 'numeric' }), value: Math.round(min) };
+  });
+  const tasks = sortTasks(st.tasks);
+  const byCat = {};
+  for (const t of S.data.tasks) {
+    const m = minutesOn(t, { userId: uid });
+    if (m > 0) byCat[t.title] = (byCat[t.title] || 0) + m;
+  }
+  const topTasks = Object.entries(byCat).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const maxTop = Math.max(1, ...topTasks.map((x) => x[1]));
+
+  return `
+    <div class="card">
+      <div class="profile-head">
+        ${avatar(u, 'xl')}
+        <div class="grow">
+          <h1>${esc(u.name)}</h1>
+          <div class="sub"><span class="role-badge role-${u.role}">${ROLE_LABEL[u.role]}</span>
+            ${team(u.teamId) ? `<span class="flex"><span class="team-dot" style="background:${team(u.teamId).color}"></span>${esc(team(u.teamId).name)}</span>` : ''}
+            ${u.title ? `<span>· ${esc(u.title)}</span>` : ''}${u.email ? `<span class="muted">· ${esc(u.email)}</span>` : ''}
+            ${u.githubLogin ? `<a class="chip gh" href="https://github.com/${esc(u.githubLogin)}" target="_blank">@${esc(u.githubLogin)}</a>` : ''}</div>
+        </div>
+        ${!isMe && canManageUser(uid) ? `<button class="btn primary" data-action="new-task" data-assignee="${uid}">+ Assign task</button>` : ''}
+        ${!isMe && me().role === 'chair' ? `<button class="btn" data-action="edit-person" data-id="${uid}">Edit</button>` : ''}
+        ${isMe ? `<button class="btn" data-action="nav" data-page="settings">Edit profile</button>` : ''}
+      </div>
+    </div>
+    <div class="grid cols-4 mt">
+      ${statTile('Active tasks', st.active, `${st.overdue} overdue`, '☰')}
+      ${statTile('Completed', st.done, `${st.doneThisWeek} this week`, '✓')}
+      ${statTile('Time this week', fmtDur(st.weekMin), `${fmtDur(st.totalMin)} all-time`, '⏱')}
+      ${statTile('Avg progress', `${st.avgProgress}%`, 'across active tasks', '%')}
+    </div>
+    <div class="grid cols-2 mt">
+      <div class="card"><div class="card-head"><h3>Time logged · last 14 days</h3><span class="sub">${fmtDur(perDay.reduce((s, p) => s + p.value, 0))}</span></div>${barChart(perDay, fmtDur)}</div>
+      <div class="card"><div class="card-head"><h3>Where the time went</h3><span class="sub">top tasks</span></div>
+        ${topTasks.length ? topTasks.map(([title, min]) => `<div class="hbar-row" data-tip="${esc(title)}: ${fmtDur(min)}"><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(title)}</span><div class="track"><div class="fill" style="width:${(min / maxTop) * 100}%"></div></div><span class="v">${fmtDur(min)}</span></div>`).join('') : empty('⏱', 'No time logged yet – start a timer on a task.')}
+      </div>
+    </div>
+    <div class="grid main-side mt">
+      <div class="card"><div class="card-head"><h3>Tasks</h3><span class="sub">${tasks.length} total</span></div>
+        <div class="compact-list">${tasks.length ? tasks.map(compactRow).join('') : empty('🗂', 'No tasks yet')}</div></div>
+      <div class="stack">${githubSection(u, isMe)}</div>
+    </div>`;
+}
+
+function githubSection(u, isMe) {
+  if (!u.githubLogin || (isMe && !u.githubConnected)) {
+    if (isMe) {
+      return `<div class="card"><div class="card-head"><h3>🐙 Connect GitHub</h3></div>
+        <p class="small muted" style="margin-top:0;line-height:1.5">Paste a <a href="https://github.com/settings/tokens?type=beta" target="_blank">fine-grained personal access token</a>
+        with read access to <i>Contents, Issues, Pull requests and Metadata</i> on the repos you work on. It's encrypted on this computer and used to auto-update linked tasks.</p>
+        <div class="field"><input type="password" id="gh-token" placeholder="github_pat_…"></div>
+        <button class="btn primary" data-action="gh-connect">Connect GitHub</button>
+        ${u.githubLogin ? `<p class="small muted">Currently showing public data for @${esc(u.githubLogin)}.</p>` : ''}
+      </div>${u.githubLogin ? `<div data-gh-panel="${u.id}">${ghPanelInner(u.id)}</div>` : ''}`;
+    }
+    if (!u.githubLogin) {
+      return `<div class="card"><div class="card-head"><h3>🐙 GitHub</h3></div>
+        <p class="small muted">${esc(u.name)} hasn't linked GitHub yet.</p>
+        ${canManageUser(u.id) ? `<div class="flex"><input type="text" id="gh-login" placeholder="GitHub username"><button class="btn" data-action="gh-set-login" data-id="${u.id}">Link</button></div>` : ''}</div>`;
+    }
+  }
+  return `${isMe ? `<div class="card flex"><span>🐙 Connected as <b>@${esc(u.githubLogin)}</b></span><span class="grow"></span><button class="btn sm ghost" data-action="gh-refresh" data-id="${u.id}">⟳ Refresh</button><button class="btn sm danger" data-action="gh-disconnect">Disconnect</button></div>` : ''}
+    <div data-gh-panel="${u.id}">${ghPanelInner(u.id)}</div>`;
+}
+
+function ghPanelInner(uid) {
+  const g = S.gh[uid];
+  if (!g || g.loading) return `<div class="card"><div class="spinner"></div><p class="empty small">Loading GitHub activity…</p></div>`;
+  if (g.error) return `<div class="card"><p class="error-text">GitHub: ${esc(g.error)}</p><button class="btn sm" data-action="gh-refresh" data-id="${uid}">Retry</button></div>`;
+  const d = g.data;
+  if (!d) return '';
+  const points = d.commitsByDay.map((c) => ({ label: new Date(c.day).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }), short: String(new Date(c.day).getDate()), value: c.count }));
+  return `
+    <div class="card">
+      <div class="flex" style="margin-bottom:12px"><span class="avatar lg"><img src="${esc(d.user.avatar)}" alt=""></span>
+        <div class="grow"><a href="${esc(d.user.url)}" target="_blank"><b style="font-size:15px">${esc(d.user.name || d.user.login)}</b></a><div class="small muted">@${esc(d.user.login)}${d.user.location ? ` · ${esc(d.user.location)}` : ''}</div>
+        ${d.user.bio ? `<div class="small" style="margin-top:4px;color:var(--text-2)">${esc(d.user.bio)}</div>` : ''}</div></div>
+      <div class="grid cols-3" style="gap:10px;margin-bottom:14px">
+        <div><div class="small muted">Commits (30d)</div><b style="font-size:20px">${d.commits30}</b></div>
+        <div><div class="small muted">Public repos</div><b style="font-size:20px">${d.user.publicRepos}</b></div>
+        <div><div class="small muted">Followers</div><b style="font-size:20px">${d.user.followers}</b></div>
+      </div>
+      <div class="small muted" style="margin-bottom:2px">Commits pushed · last 14 days</div>
+      ${barChart(points, (v) => `${v} commit${v === 1 ? '' : 's'}`)}
+    </div>
+    ${d.openPRs.length ? `<div class="card"><div class="card-head"><h3>⑂ Open pull requests</h3><span class="sub">${d.openPRs.length}</span></div>
+      ${d.openPRs.map((p) => `<div class="repo"><a href="${esc(p.url)}" target="_blank">${esc(p.title)}</a><div class="d">${esc(p.repo)} #${p.number}</div></div>`).join('')}</div>` : ''}
+    <div class="card"><div class="card-head"><h3>Recently active repos</h3></div>
+      ${d.repos.length ? d.repos.map((r) => `<div class="repo"><a href="${esc(r.url)}" target="_blank">${esc(r.name)}</a>${r.description ? `<div class="d">${esc(r.description)}</div>` : ''}
+        <div class="m">${r.language ? `<span>● ${esc(r.language)}</span>` : ''}<span>★ ${r.stars}</span><span>⑂ ${r.forks}</span><span>pushed ${relTime(r.pushedAt)}</span></div></div>`).join('') : empty('📦', 'No public repos')}
+    </div>
+    <div class="card"><div class="card-head"><h3>GitHub activity</h3><span class="sub">updated ${relTime(d.fetchedAt)}</span></div>
+      ${d.recent.length ? d.recent.map((e) => `<div class="feed-item"><div><div style="color:var(--text)">${esc(e.text)}</div><div class="small muted">${esc(e.repo)}</div></div><span class="when">${relTime(e.at)}</span></div>`).join('') : empty('·', 'No recent public activity')}
+    </div>`;
+}
+
+async function loadGithubPanel(uid, force = false) {
+  const g = S.gh[uid];
+  if (!force && g && (g.loading || g.data || g.error)) return;
+  S.gh[uid] = { loading: true };
+  try {
+    S.gh[uid] = { data: await api('githubProfile', uid, force) };
+  } catch (err) {
+    S.gh[uid] = { error: err.message };
+  }
+  const el = $(`[data-gh-panel="${uid}"]`);
+  if (el) el.innerHTML = ghPanelInner(uid);
+}
