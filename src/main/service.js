@@ -265,6 +265,158 @@ class Service {
     for (const u of this.store.users) if (u.teamId === id) u.teamId = null;
     this.commit();
   }
+
+  // ---------- tasks ----------
+  createTask(data) {
+    const me = this.me();
+    const assigneeId = data.assigneeId || me.id;
+    if (!this.managedUserIds(me).has(assigneeId)) throw new PermissionError('You cannot assign tasks to that person');
+    if (!data.title?.trim()) throw new Error('Title is required');
+    const assignee = this.store.user(assigneeId);
+    const now = new Date().toISOString();
+    const task = {
+      id: Store.id(),
+      title: data.title.trim(),
+      description: data.description?.trim() || '',
+      assigneeId,
+      assignedById: me.id,
+      teamId: data.teamId || assignee?.teamId || this.teamsHeadedBy(assignee || me)[0] || null,
+      priority: PRIORITIES.includes(data.priority) ? data.priority : 'medium',
+      status: 'todo',
+      progress: 0,
+      progressMode: data.github?.repo ? 'github' : (data.subtasks?.length ? 'checklist' : 'manual'),
+      category: data.category || 'general',
+      tags: (data.tags || []).map((t) => String(t).trim()).filter(Boolean),
+      deadline: data.deadline || null,
+      estimateHours: Number(data.estimateHours) || null,
+      subtasks: (data.subtasks || []).filter((s) => s.text?.trim()).map((s) => ({ id: Store.id(), text: s.text.trim(), done: false })),
+      github: null,
+      timeLogs: [],
+      timer: null,
+      reminders: (data.reminders || []).filter((r) => r.at).map((r) => ({ id: Store.id(), at: r.at, text: r.text || '', sent: false })),
+      comments: [],
+      parentTaskId: data.parentTaskId || null,
+      event: data.event || null,
+      deadlineReminded: false,
+      overdueNotified: false,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: null,
+    };
+    if (data.github?.repo) task.github = this._normaliseLink(data.github);
+    this.store.tasks.push(task);
+    if (assigneeId !== me.id) {
+      this.notify(assigneeId, `${me.name} assigned you "${task.title}"${task.deadline ? ` – due ${new Date(task.deadline).toLocaleString()}` : ''}`, { taskId: task.id, kind: 'assign' });
+    }
+    this.store.log(me.id, `${me.name} created "${task.title}" for ${assignee?.name || 'themself'}`, task.id);
+    this.commit();
+    if (task.github) this.syncTask(task.id).catch(() => {});
+    return task;
+  }
+
+  _normaliseLink(link) {
+    const repo = github.parseRepo(link.repo);
+    if (!repo) throw new Error('GitHub repo must look like owner/repo');
+    if (!['issue', 'pr', 'milestone'].includes(link.type)) throw new Error('Pick issue, pull request or milestone');
+    if (!Number(link.number)) throw new Error('Enter the issue / PR / milestone number');
+    return { repo, type: link.type, number: Number(link.number), state: null, info: null, lastSync: null, error: null };
+  }
+
+  updateTask(id, patch) {
+    const me = this.me();
+    const t = this.store.task(id);
+    if (!t) throw new Error('Task not found');
+    if (!this.canWork(me, t)) throw new PermissionError('Not allowed');
+    const manage = this.canManage(me, t);
+
+    if (manage) {
+      for (const k of ['title', 'description']) if (k in patch) t[k] = String(patch[k] || '').trim();
+      if ('priority' in patch && PRIORITIES.includes(patch.priority)) t.priority = patch.priority;
+      if ('category' in patch) t.category = patch.category;
+      if ('tags' in patch) t.tags = patch.tags;
+      if ('estimateHours' in patch) t.estimateHours = Number(patch.estimateHours) || null;
+      if ('deadline' in patch && patch.deadline !== t.deadline) {
+        t.deadline = patch.deadline || null;
+        t.deadlineReminded = false;
+        t.overdueNotified = false;
+        if (t.assigneeId !== me.id && t.deadline) {
+          this.notify(t.assigneeId, `Deadline for "${t.title}" set to ${new Date(t.deadline).toLocaleString()}`, { taskId: t.id, kind: 'deadline' });
+        }
+      }
+      if ('assigneeId' in patch && patch.assigneeId !== t.assigneeId) {
+        if (!this.managedUserIds(me).has(patch.assigneeId)) throw new PermissionError('Cannot assign to that person');
+        t.assigneeId = patch.assigneeId;
+        t.teamId = this.store.user(patch.assigneeId)?.teamId || t.teamId;
+        this.notify(t.assigneeId, `${me.name} assigned you "${t.title}"`, { taskId: t.id, kind: 'assign' });
+      }
+    }
+
+    if ('subtasks' in patch) t.subtasks = patch.subtasks.map((s) => ({ id: s.id || Store.id(), text: String(s.text).trim(), done: !!s.done })).filter((s) => s.text);
+    if ('progressMode' in patch && ['manual', 'checklist', 'github'].includes(patch.progressMode)) t.progressMode = patch.progressMode;
+    if ('progress' in patch && t.progressMode === 'manual') t.progress = clamp(patch.progress);
+    if (t.progressMode === 'checklist') {
+      t.progress = t.subtasks.length ? Math.round((t.subtasks.filter((s) => s.done).length / t.subtasks.length) * 100) : 0;
+    }
+    if ('reminders' in patch) {
+      t.reminders = patch.reminders.filter((r) => r.at).map((r) => ({ id: r.id || Store.id(), at: r.at, text: r.text || '', sent: r.sent && r.at === t.reminders.find((x) => x.id === r.id)?.at }));
+    }
+    if ('github' in patch) t.github = patch.github?.repo ? this._normaliseLink(patch.github) : null;
+
+    if ('status' in patch && STATUSES.includes(patch.status) && patch.status !== t.status) {
+      if (patch.status === 'done') {
+        this._complete(t, me, 'manual');
+      } else {
+        t.status = patch.status;
+        t.completedAt = null;
+      }
+    } else if (t.status === 'todo' && t.progress > 0) {
+      t.status = 'in_progress';
+    }
+
+    t.updatedAt = new Date().toISOString();
+    this.commit();
+    if ('github' in patch && t.github) this.syncTask(t.id).catch(() => {});
+    return t;
+  }
+
+  _complete(t, actor, via) {
+    t.status = 'done';
+    t.progress = 100;
+    t.completedAt = new Date().toISOString();
+    this._stopTimer(t);
+    const who = actor ? actor.name : 'GitHub';
+    const viaText = via === 'github' ? ' (auto-detected from GitHub)' : '';
+    const recipients = new Set([t.assignedById, t.assigneeId, this.store.team(t.teamId)?.headId]);
+    recipients.delete(actor?.id);
+    for (const uid of recipients) {
+      this.notify(uid, `✅ "${t.title}" was completed by ${this.store.user(t.assigneeId)?.name || who}${viaText}`, { taskId: t.id, kind: 'done' });
+    }
+    this.store.log(actor?.id || t.assigneeId, `"${t.title}" completed${viaText}`, t.id);
+    this.onTaskCompleted(t, { looksLikeEvent: ai.looksLikeEvent(t) });
+  }
+
+  deleteTask(id) {
+    const me = this.me();
+    const t = this.store.task(id);
+    if (!t) return;
+    if (!this.canManage(me, t)) throw new PermissionError('Only the person who assigned it (or a head/chair) can delete this');
+    this.store.data.tasks = this.store.tasks.filter((x) => x.id !== id);
+    this.store.log(me.id, `${me.name} deleted "${t.title}"`);
+    this.commit();
+  }
+
+  addComment(id, text) {
+    const me = this.me();
+    const t = this.store.task(id);
+    if (!t || !this.canView(me, t)) throw new PermissionError('Not allowed');
+    if (!text?.trim()) return t;
+    t.comments.push({ id: Store.id(), userId: me.id, text: text.trim(), at: new Date().toISOString() });
+    for (const uid of new Set([t.assigneeId, t.assignedById])) {
+      if (uid !== me.id) this.notify(uid, `💬 ${me.name} commented on "${t.title}"`, { taskId: t.id, kind: 'comment' });
+    }
+    this.commit();
+    return t;
+  }
 }
 
 function clamp(n) {
