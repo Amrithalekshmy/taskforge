@@ -1285,3 +1285,40 @@ function personForm(existing = null, presetTeam = null) {
     }
   };
 }
+
+// ---------- team form ----------
+function teamForm(existing = null) {
+  const t = existing || {};
+  const m = openModal(`
+    <div class="modal-head"><div class="grow"><h2>${existing ? 'Edit team' : 'New team'}</h2><p>Each team has a head who can assign work and track their members.</p></div></div>
+    <form class="modal-body" id="team-form">
+      <div class="field"><label>Team name *</label><input type="text" name="name" value="${esc(t.name || '')}" required placeholder="e.g. Web Development, Events, Sponsorship"></div>
+      <div class="field"><label>Description</label><input type="text" name="description" value="${esc(t.description || '')}"></div>
+      <div class="field"><label>Head</label><select name="headId"><option value="">— choose later —</option>
+        ${S.data.users.map((u) => `<option value="${u.id}" ${t.headId === u.id ? 'selected' : ''}>${esc(u.name)} (${ROLE_LABEL[u.role]})</option>`).join('')}</select>
+        <span class="hint">Members picked as head are promoted to Head automatically.</span></div>
+      <div class="error-text" id="team-err"></div>
+    </form>
+    <div class="modal-foot">${existing ? '<button class="btn danger" data-x="delete">Delete team</button>' : ''}<span class="grow"></span>
+      <button class="btn" data-x="close">Cancel</button><button class="btn primary" data-x="save">${existing ? 'Save' : 'Create team'}</button></div>`);
+  const form = $('#team-form');
+  m.onclick = async (e) => {
+    const x = e.target.closest('[data-x]')?.dataset.x;
+    if (x === 'close') closeModal();
+    if (x === 'save') form.requestSubmit();
+    if (x === 'delete' && await confirmModal(`Delete ${t.name}?`, 'Members stay but are no longer in a team. Tasks are kept.', 'Delete', true)) {
+      run(() => api('deleteTeam', t.id), 'Team deleted');
+    }
+  };
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(form));
+    try {
+      await (existing ? api('updateTeam', t.id, data) : api('createTeam', data));
+      closeModal();
+      toast(existing ? 'Team saved' : 'Team created', 'success');
+    } catch (err) {
+      $('#team-err').textContent = err.message;
+    }
+  };
+}
