@@ -657,3 +657,41 @@ function pageCalendar() {
     </div>
     <div class="cal">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((d) => `<div class="dow">${d}</div>`).join('')}${cells.join('')}</div>`;
 }
+
+// ============================================================ team page
+function memberRows(users) {
+  return `<div class="member-row header"><span>Person</span><span>Active</span><span>Done</span><span>Overdue</span><span>Hours (wk)</span><span>Avg progress</span></div>` +
+    users.map((u) => {
+      const st = userStats(u.id);
+      return `<div class="member-row" data-action="open-member" data-id="${u.id}">
+        <div class="person">${avatar(u)}<div class="who"><b>${esc(u.name)} <span class="role-badge role-${u.role}">${ROLE_LABEL[u.role]}</span></b><small>${esc(u.title || (u.githubLogin ? '@' + u.githubLogin : u.username))}</small></div></div>
+        <span class="num">${st.active}</span><span class="num">${st.done}</span><span class="num ${st.overdue ? 'warn' : ''}">${st.overdue}</span>
+        <span class="num">${fmtDur(st.weekMin)}</span>
+        <div class="progress-wrap" data-tip="Average progress of active tasks"><div class="progress"><div class="bar" style="width:${st.avgProgress}%"></div></div><span class="pct">${st.avgProgress}%</span></div>
+      </div>`;
+    }).join('');
+}
+
+function pageTeam() {
+  const teams = teamsIHead();
+  if (!teams.length) return empty('⚇', me().role === 'chair' ? 'No teams yet.' : 'You are not heading any team yet.', me().role === 'chair' ? '<button class="btn primary" data-action="new-team">+ New team</button>' : '');
+  const sections = teams.map((tm) => {
+    const members = S.data.users.filter((u) => u.teamId === tm.id || u.id === tm.headId)
+      .sort((a, b) => (a.id === tm.headId ? -1 : b.id === tm.headId ? 1 : a.name.localeCompare(b.name)));
+    const tt = S.data.tasks.filter((t) => t.teamId === tm.id);
+    const done = tt.filter((t) => t.status === 'done').length;
+    return `<div class="card team-card">
+      <div class="team-head">
+        <span class="team-dot" style="background:${tm.color}"></span>
+        <div class="grow"><h3>${esc(tm.name)}</h3><div class="small muted">Head: ${esc(user(tm.headId)?.name || '—')} · ${members.length} people · ${done}/${tt.length} tasks done</div></div>
+        <button class="btn sm" data-action="new-task" data-team="${tm.id}">+ Assign task</button>
+        <button class="btn sm" data-action="new-person" data-team="${tm.id}">+ Add member</button>
+      </div>
+      ${members.length ? memberRows(members) : empty('👥', 'No members yet')}
+    </div>`;
+  });
+  const unassigned = me().role === 'chair' ? S.data.users.filter((u) => !u.teamId && u.role !== 'chair') : [];
+  return `<div class="stack">${sections.join('')}
+    ${unassigned.length ? `<div class="card team-card"><div class="team-head"><span class="team-dot" style="background:#55554f"></span><div class="grow"><h3>Not in a team</h3></div></div>${memberRows(unassigned)}</div>` : ''}
+  </div>`;
+}
